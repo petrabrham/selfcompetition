@@ -1,0 +1,66 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Emulator (Pixel_7)",
+      "type": "shell",
+      "command": "emulator",
+      "args": ["-avd", "Pixel_7"],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": [],
+      "isBackground": true
+    },
+    {
+      "label": "Flutter: Get Dependencies",
+      "type": "shell",
+      "command": "flutter",
+      "args": ["pub", "get"],
+      "cwd": "${workspaceFolder}",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Flutter: Run App (emulator-5554)",
+      "type": "shell",
+      "command": "flutter",
+      "args": ["run", "-d", "emulator-5554"],
+      "cwd": "${workspaceFolder}",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": [],
+      "runOptions": {
+        "runOn": "folderOpen"
+      }
+    },
+    {
+      "label": "Flutter: Clean & Run",
+      "type": "shell",
+      "command": "flutter",
+      "args": ["clean"],
+      "cwd": "${workspaceFolder}",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "problemMatcher": [],
+      "dependsOn": ["Flutter: Get Dependencies", "Flutter: Run App (emulator-5554)"],
+      "dependsOrder": "sequence"
+    }
+  ]
+}
