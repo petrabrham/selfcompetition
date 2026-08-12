@@ -38,8 +38,9 @@ dependencies:
   # GPS a Location
   geolocator: ^11.0.0
 
-  # Mapa
-  google_maps_flutter: ^2.10.0
+  # Mapa - OpenStreetMap
+  flutter_map: ^7.0.0
+  latlong2: ^0.9.0
 
   # Databáze
   sqflite: ^2.3.0+4
