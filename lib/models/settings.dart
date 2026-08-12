@@ -1,0 +1,1 @@
+// Models - Settings data class

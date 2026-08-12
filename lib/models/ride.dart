@@ -1,0 +1,1 @@
+// Models - Ride data class
