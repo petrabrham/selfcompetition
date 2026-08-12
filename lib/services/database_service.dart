@@ -80,8 +80,8 @@ class DatabaseService {
     // Initialize default settings
     await db.insert('Settings', {
       'id': 1,
-      'user_nick': 'Jezdec',
-      'gps_update_interval_ms': 1000,
+      'user_nick': 'User1',
+      'gps_update_interval_ms': 5000,
       'min_distance_threshold_meters': 5.0,
       'num_rides_to_display': 3,
       'updated_at': DateTime.now().toIso8601String(),

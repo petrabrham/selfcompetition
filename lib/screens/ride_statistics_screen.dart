@@ -12,7 +12,7 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
   @override
   Widget build(BuildContext context) {
     return const Center(
-      child: Text('Ride Statistics Screen - TODO'),
+      child: Text('Ride Statistics - TODO'),
     );
   }
 }

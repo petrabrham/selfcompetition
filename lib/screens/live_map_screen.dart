@@ -12,7 +12,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   @override
   Widget build(BuildContext context) {
     return const Center(
-      child: Text('Live Map Screen - TODO'),
+      child: Text('Live Map - TODO'),
     );
   }
 }
