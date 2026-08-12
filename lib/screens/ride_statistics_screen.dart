@@ -11,13 +11,8 @@ class RideStatisticsScreen extends StatefulWidget {
 class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Ride Statistics'),
-      ),
-      body: const Center(
-        child: Text('Ride Statistics Screen - TODO'),
-      ),
+    return const Center(
+      child: Text('Ride Statistics Screen - TODO'),
     );
   }
 }

@@ -11,13 +11,8 @@ class RouteManagementScreen extends StatefulWidget {
 class _RouteManagementScreenState extends State<RouteManagementScreen> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Route Management'),
-      ),
-      body: const Center(
-        child: Text('Route Management Screen - TODO'),
-      ),
+    return const Center(
+      child: Text('Route Management Screen - TODO'),
     );
   }
 }

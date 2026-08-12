@@ -11,13 +11,8 @@ class LiveMapScreen extends StatefulWidget {
 class _LiveMapScreenState extends State<LiveMapScreen> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Live Map'),
-      ),
-      body: const Center(
-        child: Text('Live Map Screen - TODO'),
-      ),
+    return const Center(
+      child: Text('Live Map Screen - TODO'),
     );
   }
 }
