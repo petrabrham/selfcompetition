@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/foundation.dart';
@@ -35,6 +36,7 @@ class GPSService {
   GPSPosition? _currentPosition;
   bool _isTracking = false;
   Stream<Position>? _positionStream;
+  StreamSubscription<Position>? _positionSubscription;
 
   // Callback for position updates
   final List<Function(GPSPosition)> _positionListeners = [];
@@ -98,13 +100,18 @@ class GPSService {
 
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
-      );
+      ).timeout(const Duration(seconds: 10));
 
       _currentPosition = _convertPosition(position);
       if (kDebugMode) {
         debugPrint('GPS: Current position: $_currentPosition');
       }
       return _currentPosition;
+    } on TimeoutException {
+      if (kDebugMode) {
+        debugPrint('GPS: Timed out while waiting for a position');
+      }
+      return null;
     } catch (e) {
       if (kDebugMode) {
         debugPrint('GPS Error getting current position: $e');
@@ -136,14 +143,21 @@ class GPSService {
       }
 
       _positionStream = Geolocator.getPositionStream(
-        locationSettings: LocationSettings(
+        locationSettings: AndroidSettings(
           accuracy: LocationAccuracy.high,
           distanceFilter: minDistanceMeters.toInt(), // Filter by distance
-          timeLimit: Duration(milliseconds: updateIntervalMs),
+          intervalDuration: Duration(milliseconds: updateIntervalMs),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: 'Self Competition',
+            notificationText: 'Recording GPS position in the background',
+            notificationChannelName: 'Self Competition GPS',
+            enableWakeLock: false,
+            setOngoing: true,
+          ),
         ),
       );
 
-      _positionStream?.listen(
+      _positionSubscription = _positionStream?.listen(
         (Position position) {
           _currentPosition = _convertPosition(position);
           _notifyListeners(_currentPosition!);
@@ -175,6 +189,8 @@ class GPSService {
   Future<void> stopTracking() async {
     try {
       _isTracking = false;
+      await _positionSubscription?.cancel();
+      _positionSubscription = null;
       _positionStream = null;
       if (kDebugMode) {
         debugPrint('GPS: Tracking stopped');
@@ -212,7 +228,7 @@ class GPSService {
       accuracy: position.accuracy,
       speed: position.speed,
       timestamp: DateTime.fromMillisecondsSinceEpoch(
-        position.timestamp?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch,
+        position.timestamp.millisecondsSinceEpoch,
       ),
     );
   }

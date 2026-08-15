@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 // Screens - Route Management screen
 class RouteManagementScreen extends StatefulWidget {
-  const RouteManagementScreen({Key? key}) : super(key: key);
+  const RouteManagementScreen({super.key});
 
   @override
   State<RouteManagementScreen> createState() => _RouteManagementScreenState();

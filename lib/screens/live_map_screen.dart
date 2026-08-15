@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'dart:async';
 import '../services/gps_service.dart';
+import '../services/ride_service.dart';
+import '../services/database_service.dart';
 
 // Screens - Live Map screen
 class LiveMapScreen extends StatefulWidget {
-  const LiveMapScreen({Key? key}) : super(key: key);
+  const LiveMapScreen({super.key});
 
   @override
   State<LiveMapScreen> createState() => _LiveMapScreenState();
@@ -17,58 +19,85 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   bool _isLoading = false;
   String? _errorMessage;
   late MapController _mapController;
-  bool _isTracking = false;
-  bool _mapFailed = false;
+  bool _isRecording = false;
+  bool _isPaused = false;
+  Duration _recordingDuration = Duration.zero;
+  late Timer _timerTick;
+  String _userNick = 'User1';
 
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
-    _loadCurrentPosition();
-    
-    // Setup GPS listener only when user toggles tracking
-    // Not in initState to avoid MapController issues
+    _setupGPSListener();
+    _startLiveTracking();
+    _restoreRecordingState();
+    _loadUserAndPosition();
   }
 
-  /// Setup GPS position listener for real-time tracking
-  void _setupGPSListener() {
-    GPSService.instance.addPositionListener((position) {
-      if (mounted) {
-        setState(() {
-          _currentPosition = position;
-        });
-        
-        // Auto-center map on new position if tracking
-        if (_isTracking) {
-          _centerMapOnPosition(position);
-        }
+  void _restoreRecordingState() {
+    final rideService = RideService.instance;
+    if (!rideService.isRecording) return;
 
-        if (kDebugMode) {
-          debugPrint('=== LIVE MAP: GPS Update ===');
-          debugPrint('Latitude: ${position.latitude}');
-          debugPrint('Longitude: ${position.longitude}');
-          debugPrint('============================');
-        }
+    _isRecording = true;
+    _isPaused = rideService.isPaused;
+    final ride = rideService.currentRide;
+    if (ride != null) {
+      _recordingDuration = DateTime.now().difference(ride.startTime);
+    }
+
+    _timerTick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _isRecording && !_isPaused) {
+        setState(() {
+          _recordingDuration += const Duration(seconds: 1);
+        });
       }
     });
   }
 
-  /// Center map on given position
-  void _centerMapOnPosition(GPSPosition position) {
+  /// Načti uživatele z Settings a poté pozici
+  Future<void> _loadUserAndPosition() async {
     try {
-      _mapController.move(
-        LatLng(position.latitude, position.longitude),
-        16.0,
-      );
+      final settings = await DatabaseService.instance.getSettings();
+      setState(() {
+        _userNick = settings?['user_nick'] ?? 'User1';
+      });
     } catch (e) {
       if (kDebugMode) {
-        debugPrint('Map center error: $e');
+        debugPrint('Error loading user: $e');
       }
     }
+    
+    _loadCurrentPosition();
+  }
+
+  /// Setup GPS position listener for real-time tracking
+  void _setupGPSListener() {
+    GPSService.instance.addPositionListener(_onGPSPosition);
+  }
+
+  void _onGPSPosition(GPSPosition position) {
+    if (mounted) {
+      setState(() {
+        _currentPosition = position;
+      });
+
+    }
+  }
+
+  Future<void> _startLiveTracking() async {
+    final settings = await DatabaseService.instance.getSettings();
+    await GPSService.instance.startTracking(
+      updateIntervalMs: settings?['gps_update_interval_ms'] as int? ?? 5000,
+      minDistanceMeters:
+          (settings?['min_distance_threshold_meters'] as num?)?.toDouble() ?? 5.0,
+    );
   }
 
   /// Load current GPS position
   Future<void> _loadCurrentPosition() async {
+    if (_isLoading) return;
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -91,7 +120,8 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
         }
       } else {
         setState(() {
-          _errorMessage = 'Failed to get GPS position. Check location permissions.';
+          _errorMessage =
+              'No GPS position received within 10 seconds. Check the emulator location.';
         });
       }
     } catch (e) {
@@ -108,54 +138,151 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
     }
   }
 
-  /// Toggle tracking mode
-  void _toggleTracking() {
+  /// Začni záznam jízdy
+  Future<void> _startRecording() async {
+    await RideService.instance.startRecording(userId: _userNick);
+    
     setState(() {
-      _isTracking = !_isTracking;
+      _isRecording = true;
+      _isPaused = false;
+      _recordingDuration = Duration.zero;
     });
     
-    if (_isTracking) {
-      // Setup GPS listener only when tracking starts
-      _setupGPSListener();
+    // Spusť timer pro aktualizaci doby trvání
+    _timerTick = Timer.periodic(Duration(seconds: 1), (_) {
+      if (mounted && _isRecording && !_isPaused) {
+        setState(() {
+          _recordingDuration = _recordingDuration + Duration(seconds: 1);
+        });
+      }
+    });
+    
+    if (kDebugMode) {
+      debugPrint('=== LIVE MAP: Recording started ===');
+    }
+  }
+
+  void _togglePause() {
+    if (!_isRecording) return;
+
+    setState(() {
+      _isPaused = !_isPaused;
+    });
+
+    if (_isPaused) {
+      RideService.instance.pauseRecording();
+    } else {
+      RideService.instance.resumeRecording();
+    }
+  }
+
+  /// Zastav záznam jízdy
+  Future<void> _stopRecording() async {
+    _timerTick.cancel();
+    
+    final success = await RideService.instance.stopRecording();
+    
+    setState(() {
+      _isRecording = false;
+      _isPaused = false;
+    });
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '✅ Ride saved!' : '❌ Error saving ride'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
     
     if (kDebugMode) {
-      debugPrint('GPS Tracking: ${_isTracking ? 'ENABLED' : 'DISABLED'}');
+      debugPrint('=== LIVE MAP: Recording stopped ===');
     }
   }
 
   @override
   void dispose() {
     _mapController.dispose();
-    GPSService.instance.removePositionListener((position) {
-      // Dummy callback for cleanup
-    });
+    if (_isRecording) {
+      _timerTick.cancel();
+    }
+    GPSService.instance.removePositionListener(_onGPSPosition);
     super.dispose();
   }
 
   /// Fallback UI when map fails to load
   Widget _buildFallbackUI() {
+    final ride = RideService.instance.currentRide;
+    
     return Container(
       color: Colors.grey.shade200,
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 96.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(height: 40),
-            Icon(Icons.warning, color: Colors.orange, size: 48),
-            const SizedBox(height: 16),
-            const Text(
-              'Map unavailable',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Showing coordinates only',
-              style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-            ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 20),
+            
+            // Recording status header
+            if (_isRecording) ...[
+              Container(
+                margin: const EdgeInsets.only(right: 64.0),
+                padding: const EdgeInsets.all(16.0),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade100,
+                  border: Border.all(color: Colors.red, width: 2),
+                  borderRadius: BorderRadius.circular(12.0),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      '🔴 RECORDING',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // Time
+                    _buildStatField(
+                      label: 'Time',
+                      value: _formatDuration(_recordingDuration),
+                      icon: Icons.timer,
+                    ),
+                    const SizedBox(height: 8),
+                    // Distance
+                    if (ride != null)
+                      _buildStatField(
+                        label: 'Distance',
+                        value: '${(ride.totalDistance / 1000).toStringAsFixed(2)} km',
+                        icon: Icons.route,
+                      ),
+                    if (ride != null) const SizedBox(height: 8),
+                    // Speed
+                    if (ride != null)
+                      _buildStatField(
+                        label: 'Avg Speed',
+                        value: '${(ride.avgSpeed * 3.6).toStringAsFixed(2)} km/h',
+                        icon: Icons.speed,
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ] else ...[
+              Icon(Icons.location_on_outlined, color: Colors.blue, size: 48),
+              const SizedBox(height: 16),
+              const Text(
+                'Live Position',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 32),
+            ],
+            
+            // Position fields
             if (_currentPosition != null) ...[
               _buildPositionField(
                 label: 'Latitude',
@@ -181,9 +308,44 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
                 icon: Icons.speed,
               ),
             ],
+            
           ],
         ),
       ),
+    );
+  }
+
+  /// Format recording duration
+  String _formatDuration(Duration duration) {
+    String minutes = duration.inMinutes.toString().padLeft(2, '0');
+    String seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
+  /// Build stat field for recording (time, distance, speed)
+  Widget _buildStatField({
+    required String label,
+    required String value,
+    required IconData icon,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: Colors.red, size: 20),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+        ),
+      ],
     );
   }
 
@@ -228,9 +390,47 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   @override
   Widget build(BuildContext context) {
     return Stack(
+      fit: StackFit.expand,
       children: [
         // Always show fallback UI for now (map has SSL issues on emulator)
         _buildFallbackUI(),
+
+        if (_isLoading)
+          const Positioned(
+            top: 16,
+            left: 16,
+            child: Card(
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 10),
+                    Text('Getting GPS position...'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        if (_errorMessage != null)
+          Positioned(
+            top: 16,
+            left: 16,
+            right: 80,
+            child: Card(
+              color: Colors.red.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(_errorMessage!),
+              ),
+            ),
+          ),
 
         // Zoom controls - top right
         Positioned(
@@ -242,9 +442,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
               FloatingActionButton(
                 mini: true,
                 backgroundColor: Colors.green,
-                onPressed: _currentPosition != null
-                    ? () => _centerMapOnPosition(_currentPosition!)
-                    : null,
+                onPressed: null,
                 child: const Icon(Icons.my_location, color: Colors.white),
               ),
               const SizedBox(height: 8),
@@ -252,12 +450,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
               FloatingActionButton(
                 mini: true,
                 backgroundColor: Colors.blue,
-                onPressed: () {
-                  _mapController.move(
-                    _mapController.camera.center,
-                    _mapController.camera.zoom + 1,
-                  );
-                },
+                onPressed: null,
                 child: const Icon(Icons.add, color: Colors.white),
               ),
               const SizedBox(height: 8),
@@ -265,18 +458,13 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
               FloatingActionButton(
                 mini: true,
                 backgroundColor: Colors.blue,
-                onPressed: () {
-                  _mapController.move(
-                    _mapController.camera.center,
-                    _mapController.camera.zoom - 1,
-                  );
-                },
+                onPressed: null,
                 child: const Icon(Icons.remove, color: Colors.white),
               ),
             ],
           ),
         ),
-        // Bottom info panel
+        // Fixed recording controls. The Scaffold places this above bottom navigation.
         Positioned(
           bottom: 0,
           left: 0,
@@ -289,79 +477,51 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
               ),
             ),
             padding: const EdgeInsets.all(12.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Position info
-                if (_currentPosition != null) ...[
-                  Text(
-                    'Latitude: ${_currentPosition!.latitude.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 4.0),
+                child: !_isRecording
+                  ? SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _startRecording,
+                      icon: const Icon(Icons.play_arrow),
+                      label: const Text('START RECORDING'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Longitude: ${_currentPosition!.longitude.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Accuracy: ±${_currentPosition!.accuracy.toStringAsFixed(1)} m',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                
-                // Buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _loadCurrentPosition,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                        child: const Text(
-                          'Refresh',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
+                  )
+                : Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _stopRecording,
+                          icon: const Icon(Icons.stop),
+                          label: const Text('STOP'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _toggleTracking,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _isTracking
-                              ? Colors.green
-                              : Colors.grey,
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                        child: Text(
-                          _isTracking ? 'Tracking ON' : 'Tracking OFF',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _togglePause,
+                          icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause),
+                          label: Text(_isPaused ? 'RESUME' : 'PAUSE'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+              ),
             ),
           ),
         ),

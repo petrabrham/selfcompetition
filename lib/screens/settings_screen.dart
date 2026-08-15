@@ -4,7 +4,7 @@ import '../services/database_service.dart';
 
 // Screens - Settings screen
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({Key? key}) : super(key: key);
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();

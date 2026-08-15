@@ -47,18 +47,13 @@ dependencies:
 
   # Path provider
   path_provider: ^2.1.1
+  path: ^1.9.1
 
   # Formátování data a času
   intl: ^0.19.0
 
   # GPX soubory
   gpx: ^2.3.1
-
-  # Wake Lock - úspora baterie
-  wakelock_plus: ^1.2.4
-
-  # Udržení displeje zapnutého během jízdy
-  keep_screen_on: ^6.0.0
 
 dev_dependencies:
   flutter_test:

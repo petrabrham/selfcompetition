@@ -16,7 +16,7 @@ Funkčnost:
 7. Settings screen - uložit Nick a periodu - DONE
 8. GPS - zjistit aktuální pozici - DONE
 9. Live Map screen - základní layout - DONE
-10. OpenStreetMap  - zobrazit na mapě
+10. OpenStreetMap  - zobrazit na mapě - DONE
 11. START/STOP tlačítka - stav a logika
 12. GPX export - uložit jízdu
 13. Wake Lock - úspora baterie
