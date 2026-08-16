@@ -58,6 +58,7 @@ class RideService {
   RecordedRide? _currentRide;
   bool _isRecording = false;
   bool _isPaused = false;
+  String? _lastError;
 
   RideService._internal();
 
@@ -69,9 +70,13 @@ class RideService {
 
   bool get isPaused => _isPaused;
 
+  String? get lastError => _lastError;
+
   /// Začni záznam nové jízdy
   Future<void> startRecording({required String userId}) async {
+    _lastError = null;
     if (_isRecording) {
+      _lastError = 'Already recording';
       if (kDebugMode) {
         debugPrint('Ride: Already recording');
       }
@@ -115,7 +120,9 @@ class RideService {
 
   /// Zastav záznam a ulož jízdu do DB
   Future<bool> stopRecording() async {
+    _lastError = null;
     if (!_isRecording || _currentRide == null) {
+      _lastError = 'No active recording session';
       if (kDebugMode) {
         debugPrint('Ride: Not recording');
       }
@@ -140,6 +147,9 @@ class RideService {
     // Ulož do databáze
     try {
       const routeId = 0;
+      if (kDebugMode) {
+        debugPrint('Ride: Saving with route_id=0 (Route Management not implemented yet)');
+      }
       final rideId = await DatabaseService.instance.insertRide({
         'route_id': routeId,
         'gpx_file_path': '',
@@ -170,6 +180,7 @@ class RideService {
 
       return true;
     } catch (e) {
+      _lastError = e.toString();
       if (kDebugMode) {
         debugPrint('Ride Error saving to DB: $e');
       }

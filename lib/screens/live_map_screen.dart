@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:flutter/services.dart';
 import 'dart:async';
 import '../services/gps_service.dart';
 import '../services/ride_service.dart';
@@ -14,21 +16,33 @@ class LiveMapScreen extends StatefulWidget {
   State<LiveMapScreen> createState() => _LiveMapScreenState();
 }
 
-class _LiveMapScreenState extends State<LiveMapScreen> {
+class _LiveMapScreenState extends State<LiveMapScreen>
+    with WidgetsBindingObserver {
+  static LatLng? _lastMapCenter;
+  static double _lastMapZoom = 16;
+  static bool _lastFollowPosition = true;
+
   GPSPosition? _currentPosition;
   bool _isLoading = false;
   String? _errorMessage;
   late MapController _mapController;
+  bool _mapReady = false;
+  bool _followPosition = true;
   bool _isRecording = false;
   bool _isPaused = false;
+  bool _screenDimmed = false;
   Duration _recordingDuration = Duration.zero;
   late Timer _timerTick;
+  Timer? _screenSleepTimer;
   String _userNick = 'User1';
+  int _screenOffTimeoutSeconds = 30;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _mapController = MapController();
+    _followPosition = _lastFollowPosition;
     _setupGPSListener();
     _startLiveTracking();
     _restoreRecordingState();
@@ -53,6 +67,8 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
         });
       }
     });
+
+    _scheduleScreenSleep();
   }
 
   /// Načti uživatele z Settings a poté pozici
@@ -61,6 +77,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
       final settings = await DatabaseService.instance.getSettings();
       setState(() {
         _userNick = settings?['user_nick'] ?? 'User1';
+        _screenOffTimeoutSeconds = settings?['screen_off_timeout_seconds'] ?? 30;
       });
     } catch (e) {
       if (kDebugMode) {
@@ -77,11 +94,86 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   }
 
   void _onGPSPosition(GPSPosition position) {
+    _currentPosition = position;
+
+    if (_screenDimmed) {
+      return;
+    }
+
+    if (_mapReady && _followPosition) {
+      _centerMapOnPosition(position);
+    }
+
     if (mounted) {
       setState(() {
-        _currentPosition = position;
+        // Trigger UI update while screen is active.
       });
 
+    }
+  }
+
+  void _centerMapOnPosition(GPSPosition position) {
+    if (!_mapReady) return;
+    _mapController.move(
+      LatLng(position.latitude, position.longitude),
+      _mapController.camera.zoom,
+    );
+  }
+
+  void _toggleFollowPosition() {
+    if (_currentPosition == null) return;
+
+    setState(() {
+      _followPosition = !_followPosition;
+      _lastFollowPosition = _followPosition;
+    });
+
+    if (_followPosition && _currentPosition != null) {
+      _centerMapOnPosition(_currentPosition!);
+    }
+  }
+
+  void _storeMapCamera(MapCamera camera) {
+    _lastMapCenter = camera.center;
+    _lastMapZoom = camera.zoom;
+  }
+
+  void _scheduleScreenSleep() {
+    _screenSleepTimer?.cancel();
+    if (!_isRecording) return;
+
+    _screenSleepTimer = Timer(
+      Duration(seconds: _screenOffTimeoutSeconds),
+      _dimScreen,
+    );
+  }
+
+  void _dimScreen() {
+    if (!_isRecording || !mounted || _screenDimmed) return;
+
+    setState(() {
+      _screenDimmed = true;
+    });
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  void _wakeScreen() {
+    _screenSleepTimer?.cancel();
+
+    if (_screenDimmed && mounted) {
+      setState(() {
+        _screenDimmed = false;
+      });
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+
+    _scheduleScreenSleep();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _wakeScreen();
     }
   }
 
@@ -147,6 +239,7 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
       _isPaused = false;
       _recordingDuration = Duration.zero;
     });
+    _scheduleScreenSleep();
     
     // Spusť timer pro aktualizaci doby trvání
     _timerTick = Timer.periodic(Duration(seconds: 1), (_) {
@@ -165,6 +258,8 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
   void _togglePause() {
     if (!_isRecording) return;
 
+    _wakeScreen();
+
     setState(() {
       _isPaused = !_isPaused;
     });
@@ -181,6 +276,9 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
     _timerTick.cancel();
     
     final success = await RideService.instance.stopRecording();
+    final error = RideService.instance.lastError;
+    _screenSleepTimer?.cancel();
+    _wakeScreen();
     
     setState(() {
       _isRecording = false;
@@ -190,7 +288,11 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(success ? '✅ Ride saved!' : '❌ Error saving ride'),
+          content: Text(
+            success
+                ? '✅ Ride saved!'
+                : '❌ Error saving ride${error != null ? ': $error' : ''}',
+          ),
           duration: Duration(seconds: 2),
         ),
       );
@@ -198,12 +300,21 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
     
     if (kDebugMode) {
       debugPrint('=== LIVE MAP: Recording stopped ===');
+      if (!success) {
+        debugPrint('Live Map: Ride save failed${error != null ? ': $error' : ''}');
+      }
     }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _lastFollowPosition = _followPosition;
+    if (_mapReady) {
+      _storeMapCamera(_mapController.camera);
+    }
     _mapController.dispose();
+    _screenSleepTimer?.cancel();
     if (_isRecording) {
       _timerTick.cancel();
     }
@@ -211,189 +322,79 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
     super.dispose();
   }
 
-  /// Fallback UI when map fails to load
-  Widget _buildFallbackUI() {
-    final ride = RideService.instance.currentRide;
-    
-    return Container(
-      color: Colors.grey.shade200,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 96.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const SizedBox(height: 20),
-            
-            // Recording status header
-            if (_isRecording) ...[
-              Container(
-                margin: const EdgeInsets.only(right: 64.0),
-                padding: const EdgeInsets.all(16.0),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade100,
-                  border: Border.all(color: Colors.red, width: 2),
-                  borderRadius: BorderRadius.circular(12.0),
-                ),
-                child: Column(
-                  children: [
-                    const Text(
-                      '🔴 RECORDING',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.red,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    // Time
-                    _buildStatField(
-                      label: 'Time',
-                      value: _formatDuration(_recordingDuration),
-                      icon: Icons.timer,
-                    ),
-                    const SizedBox(height: 8),
-                    // Distance
-                    if (ride != null)
-                      _buildStatField(
-                        label: 'Distance',
-                        value: '${(ride.totalDistance / 1000).toStringAsFixed(2)} km',
-                        icon: Icons.route,
-                      ),
-                    if (ride != null) const SizedBox(height: 8),
-                    // Speed
-                    if (ride != null)
-                      _buildStatField(
-                        label: 'Avg Speed',
-                        value: '${(ride.avgSpeed * 3.6).toStringAsFixed(2)} km/h',
-                        icon: Icons.speed,
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-            ] else ...[
-              Icon(Icons.location_on_outlined, color: Colors.blue, size: 48),
-              const SizedBox(height: 16),
-              const Text(
-                'Live Position',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 32),
-            ],
-            
-            // Position fields
-            if (_currentPosition != null) ...[
-              _buildPositionField(
-                label: 'Latitude',
-                value: _currentPosition!.latitude.toStringAsFixed(6),
-                icon: Icons.location_on,
-              ),
-              const SizedBox(height: 12),
-              _buildPositionField(
-                label: 'Longitude',
-                value: _currentPosition!.longitude.toStringAsFixed(6),
-                icon: Icons.location_on,
-              ),
-              const SizedBox(height: 12),
-              _buildPositionField(
-                label: 'Accuracy',
-                value: '±${_currentPosition!.accuracy.toStringAsFixed(1)} m',
-                icon: Icons.precision_manufacturing,
-              ),
-              const SizedBox(height: 12),
-              _buildPositionField(
-                label: 'Speed',
-                value: '${(_currentPosition!.speed * 3.6).toStringAsFixed(2)} km/h',
-                icon: Icons.speed,
-              ),
-            ],
-            
-          ],
-        ),
+  Widget _buildMapLayer() {
+    final center = _lastMapCenter ??
+        (_currentPosition != null
+            ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
+            : const LatLng(50.0755, 14.4378));
+
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: center,
+        initialZoom: _lastMapZoom,
+        onPositionChanged: (camera, hasGesture) {
+          _storeMapCamera(camera);
+          if (hasGesture && _followPosition && mounted) {
+            setState(() {
+              _followPosition = false;
+              _lastFollowPosition = false;
+            });
+          }
+        },
+        onMapReady: () {
+          if (_lastMapCenter != null) {
+            _mapController.move(_lastMapCenter!, _lastMapZoom);
+          } else if (_followPosition && _currentPosition != null) {
+            _centerMapOnPosition(_currentPosition!);
+          }
+
+          if (mounted) {
+            setState(() {
+              _mapReady = true;
+            });
+          } else {
+            _mapReady = true;
+          }
+        },
       ),
-    );
-  }
-
-  /// Format recording duration
-  String _formatDuration(Duration duration) {
-    String minutes = duration.inMinutes.toString().padLeft(2, '0');
-    String seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
-  /// Build stat field for recording (time, distance, speed)
-  Widget _buildStatField({
-    required String label,
-    required String value,
-    required IconData icon,
-  }) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Row(
-          children: [
-            Icon(icon, color: Colors.red, size: 20),
-            const SizedBox(width: 12),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-            ),
-          ],
+        TileLayer(
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.example.selfcompetition',
         ),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-        ),
-      ],
-    );
-  }
-
-  /// Build position field widget
-  Widget _buildPositionField({
-    required String label,
-    required String value,
-    required IconData icon,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12.0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: Colors.grey.shade300),
-        borderRadius: BorderRadius.circular(8.0),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.blue, size: 24),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+        if (_currentPosition != null)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: LatLng(
+                  _currentPosition!.latitude,
+                  _currentPosition!.longitude,
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                width: 42,
+                height: 42,
+                child: const Icon(
+                  Icons.location_pin,
+                  color: Colors.red,
+                  size: 42,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // Always show fallback UI for now (map has SSL issues on emulator)
-        _buildFallbackUI(),
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: _wakeScreen,
+      onPanDown: (_) => _wakeScreen(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+        _buildMapLayer(),
 
         if (_isLoading)
           const Positioned(
@@ -441,16 +442,26 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
               // Center on position
               FloatingActionButton(
                 mini: true,
-                backgroundColor: Colors.green,
-                onPressed: null,
-                child: const Icon(Icons.my_location, color: Colors.white),
+                backgroundColor: _followPosition ? Colors.green : Colors.grey,
+                onPressed: _currentPosition != null
+                    ? _toggleFollowPosition
+                    : null,
+                child: Icon(
+                  _followPosition ? Icons.my_location : Icons.location_searching,
+                  color: Colors.white,
+                ),
               ),
               const SizedBox(height: 8),
               // Zoom In
               FloatingActionButton(
                 mini: true,
                 backgroundColor: Colors.blue,
-                onPressed: null,
+                onPressed: _mapReady
+                    ? () => _mapController.move(
+                          _mapController.camera.center,
+                          _mapController.camera.zoom + 1,
+                        )
+                    : null,
                 child: const Icon(Icons.add, color: Colors.white),
               ),
               const SizedBox(height: 8),
@@ -458,7 +469,12 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
               FloatingActionButton(
                 mini: true,
                 backgroundColor: Colors.blue,
-                onPressed: null,
+                onPressed: _mapReady
+                    ? () => _mapController.move(
+                          _mapController.camera.center,
+                          _mapController.camera.zoom - 1,
+                        )
+                    : null,
                 child: const Icon(Icons.remove, color: Colors.white),
               ),
             ],
@@ -525,7 +541,20 @@ class _LiveMapScreenState extends State<LiveMapScreen> {
             ),
           ),
         ),
+        if (_screenDimmed)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: const Text(
+                'Screen dimmed to save battery\nTap to wake',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+            ),
+          ),
       ],
+      ),
     );
   }
 }

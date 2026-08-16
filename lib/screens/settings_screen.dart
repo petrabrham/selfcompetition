@@ -18,6 +18,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   double _gpsIntervalSeconds = 5.0; // seconds
   double _minDistance = 5.0; // meters
   int _numRidesToDisplay = 3;
+  double _screenOffTimeoutSeconds = 30.0;
   bool _isLoading = false;
   String? _errorMessage;
   String? _nickError;
@@ -64,6 +65,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _gpsIntervalSeconds = (settings['gps_update_interval_ms'] ?? 5000) / 1000.0;
           _minDistance = settings['min_distance_threshold_meters'] ?? 5.0;
           _numRidesToDisplay = settings['num_rides_to_display'] ?? 3;
+          _screenOffTimeoutSeconds =
+              (settings['screen_off_timeout_seconds'] ?? 30).toDouble();
           // Validate after loading from database
           _validateNick();
         });
@@ -100,6 +103,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'gps_update_interval_ms': (_gpsIntervalSeconds * 1000).toInt(),
         'min_distance_threshold_meters': _minDistance,
         'num_rides_to_display': _numRidesToDisplay,
+        'screen_off_timeout_seconds': _screenOffTimeoutSeconds.toInt(),
       });
 
       // Debug: Read and print settings from database
@@ -111,6 +115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           debugPrint('GPS Interval (ms): ${settings['gps_update_interval_ms']}');
           debugPrint('Min Distance (m): ${settings['min_distance_threshold_meters']}');
           debugPrint('Rides to Display: ${settings['num_rides_to_display']}');
+          debugPrint('Screen Off Timeout (s): ${settings['screen_off_timeout_seconds']}');
           debugPrint('Updated At: ${settings['updated_at']}');
           debugPrint('========================');
         }
@@ -257,6 +262,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               Text('${_minDistance.toStringAsFixed(1)}m'),
+            ],
+          ),
+          const SizedBox(height: 24),
+
+          // Screen Off Timeout Slider
+          const Text(
+            'Screen Off Timeout (recording)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const Text(
+            'Dim screen after inactivity while recording',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _screenOffTimeoutSeconds,
+                  min: 10,
+                  max: 120,
+                  divisions: 22,
+                  label: '${_screenOffTimeoutSeconds.toInt()}s',
+                  onChanged: (value) {
+                    setState(() {
+                      _screenOffTimeoutSeconds = value;
+                    });
+                  },
+                ),
+              ),
+              Text('${_screenOffTimeoutSeconds.toInt()}s'),
             ],
           ),
           const SizedBox(height: 24),

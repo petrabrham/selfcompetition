@@ -26,9 +26,18 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createTables,
+      onUpgrade: _upgradeDatabase,
     );
+  }
+
+  Future<void> _upgradeDatabase(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        'ALTER TABLE Settings ADD COLUMN screen_off_timeout_seconds INTEGER DEFAULT 30',
+      );
+    }
   }
 
   /// Create all tables
@@ -73,6 +82,7 @@ class DatabaseService {
         gps_update_interval_ms INTEGER DEFAULT 1000,
         min_distance_threshold_meters REAL DEFAULT 5.0,
         num_rides_to_display INTEGER DEFAULT 3,
+        screen_off_timeout_seconds INTEGER DEFAULT 30,
         updated_at TEXT NOT NULL
       )
     ''');
@@ -84,6 +94,7 @@ class DatabaseService {
       'gps_update_interval_ms': 5000,
       'min_distance_threshold_meters': 5.0,
       'num_rides_to_display': 3,
+      'screen_off_timeout_seconds': 30,
       'updated_at': DateTime.now().toIso8601String(),
     });
   }
