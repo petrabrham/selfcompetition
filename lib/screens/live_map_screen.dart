@@ -12,7 +12,9 @@ enum _MapOrientationMode { free, northUp }
 
 // Screens - Live Map screen
 class LiveMapScreen extends StatefulWidget {
-  const LiveMapScreen({super.key});
+  final VoidCallback? onSleepRequested;
+
+  const LiveMapScreen({super.key, this.onSleepRequested});
 
   @override
   State<LiveMapScreen> createState() => _LiveMapScreenState();
@@ -20,6 +22,8 @@ class LiveMapScreen extends StatefulWidget {
 
 class _LiveMapScreenState extends State<LiveMapScreen>
     with WidgetsBindingObserver {
+  static const MethodChannel _powerChannel =
+      MethodChannel('selfcompetition/power');
   static LatLng? _lastMapCenter;
   static double _lastMapZoom = 16;
   static double _lastMapRotation = 0;
@@ -42,6 +46,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   Timer? _screenSleepTimer;
   String _userNick = 'User1';
   int _screenOffTimeoutSeconds = 30;
+  bool _settingsLoaded = false;
 
   @override
   void initState() {
@@ -75,7 +80,9 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       }
     });
 
-    _scheduleScreenSleep();
+    if (_settingsLoaded) {
+      _scheduleScreenSleep();
+    }
   }
 
   /// Načti uživatele z Settings a poté pozici
@@ -85,7 +92,14 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       setState(() {
         _userNick = settings?['user_nick'] ?? 'User1';
         _screenOffTimeoutSeconds = settings?['screen_off_timeout_seconds'] ?? 30;
+        _settingsLoaded = true;
       });
+      if (kDebugMode) {
+        debugPrint(
+          'POWER: Loaded screen timeout: ${_screenOffTimeoutSeconds}s',
+        );
+      }
+      _scheduleScreenSleep();
     } catch (e) {
       if (kDebugMode) {
         debugPrint('Error loading user: $e');
@@ -170,21 +184,79 @@ class _LiveMapScreenState extends State<LiveMapScreen>
 
   void _scheduleScreenSleep() {
     _screenSleepTimer?.cancel();
-    if (!_isRecording) return;
+
+    if (kDebugMode) {
+      debugPrint(
+        'POWER: Scheduling screen dim in ${_screenOffTimeoutSeconds}s',
+      );
+    }
 
     _screenSleepTimer = Timer(
       Duration(seconds: _screenOffTimeoutSeconds),
-      _dimScreen,
+      () {
+        if (kDebugMode) {
+          debugPrint('POWER: Screen dim timer fired');
+        }
+        _dimScreen();
+      },
     );
   }
 
   void _dimScreen() {
-    if (!_isRecording || !mounted || _screenDimmed) return;
+    if (widget.onSleepRequested != null) {
+      widget.onSleepRequested!();
+      return;
+    }
+
+    if (!mounted || _screenDimmed) {
+      if (kDebugMode) {
+        debugPrint(
+          'POWER: Screen dim skipped '
+          '(mounted=$mounted, dimmed=$_screenDimmed)',
+        );
+      }
+      return;
+    }
 
     setState(() {
       _screenDimmed = true;
     });
+    if (kDebugMode) {
+      debugPrint('POWER: Screen dimmed');
+    }
+    _setPowerSavingMode(true);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  void _sleepNow() {
+    _screenSleepTimer?.cancel();
+    _dimScreen();
+  }
+
+  Future<void> _setRecordingKeepScreenOn(bool enabled) async {
+    try {
+      await _powerChannel.invokeMethod<void>(
+        'setRecordingKeepScreenOn',
+        enabled,
+      );
+    } on PlatformException catch (e) {
+      if (kDebugMode) {
+        debugPrint('Power setting error: ${e.message}');
+      }
+    }
+  }
+
+  Future<void> _setPowerSavingMode(bool enabled) async {
+    try {
+      await _powerChannel.invokeMethod<void>(
+        'setPowerSavingMode',
+        enabled,
+      );
+    } on PlatformException catch (e) {
+      if (kDebugMode) {
+        debugPrint('Power saving mode error: ${e.message}');
+      }
+    }
   }
 
   void _wakeScreen() {
@@ -194,6 +266,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       setState(() {
         _screenDimmed = false;
       });
+      _setPowerSavingMode(false);
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
 
@@ -204,11 +277,27 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _wakeScreen();
+      if (_isRecording && !_screenDimmed) {
+        _setRecordingKeepScreenOn(true);
+      }
+      if (!_isRecording) {
+        _startLiveTracking();
+      }
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (_isRecording) {
+        _setRecordingKeepScreenOn(false);
+      }
+      if (!_isRecording) {
+        GPSService.instance.stopTracking();
+      }
     }
   }
 
   Future<void> _startLiveTracking() async {
     final settings = await DatabaseService.instance.getSettings();
+    if (!mounted && !RideService.instance.isRecording) return;
     await GPSService.instance.startTracking(
       updateIntervalMs: settings?['gps_update_interval_ms'] as int? ?? 5000,
       minDistanceMeters:
@@ -263,6 +352,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   /// Začni záznam jízdy
   Future<void> _startRecording() async {
     await RideService.instance.startRecording(userId: _userNick);
+    await _setRecordingKeepScreenOn(true);
     
     setState(() {
       _isRecording = true;
@@ -306,6 +396,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     _timerTick.cancel();
     
     final success = await RideService.instance.stopRecording();
+    await _setRecordingKeepScreenOn(false);
     final error = RideService.instance.lastError;
     _screenSleepTimer?.cancel();
     _wakeScreen();
@@ -314,6 +405,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       _isRecording = false;
       _isPaused = false;
     });
+
+    if (mounted) {
+      _startLiveTracking();
+    }
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -346,6 +441,11 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     }
     _mapController.dispose();
     _screenSleepTimer?.cancel();
+    _setPowerSavingMode(false);
+    if (!_isRecording) {
+      GPSService.instance.stopTracking();
+      _setRecordingKeepScreenOn(false);
+    }
     if (_isRecording) {
       _timerTick.cancel();
     }
@@ -431,8 +531,6 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onTap: _wakeScreen,
-      onPanDown: (_) => _wakeScreen(),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -551,17 +649,33 @@ class _LiveMapScreenState extends State<LiveMapScreen>
               child: Padding(
                 padding: const EdgeInsets.only(top: 4.0),
                 child: !_isRecording
-                  ? SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _startRecording,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('START RECORDING'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.green,
-                        padding: const EdgeInsets.symmetric(vertical: 10),
+                  ? Row(
+                    children: [
+                      Expanded(
+                        flex: 2,
+                        child: ElevatedButton.icon(
+                          onPressed: _startRecording,
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('START RECORDING'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: _sleepNow,
+                          icon: const Icon(Icons.bedtime),
+                          label: const Text('SLEEP'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.indigo,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                          ),
+                        ),
+                      ),
+                    ],
                   )
                 : Row(
                     children: [
@@ -594,18 +708,6 @@ class _LiveMapScreenState extends State<LiveMapScreen>
             ),
           ),
         ),
-        if (_screenDimmed)
-          Positioned.fill(
-            child: Container(
-              color: Colors.black,
-              alignment: Alignment.center,
-              child: const Text(
-                'Screen dimmed to save battery\nTap to wake',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-              ),
-            ),
-          ),
       ],
       ),
     );

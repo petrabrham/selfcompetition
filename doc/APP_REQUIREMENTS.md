@@ -39,15 +39,25 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
   - Režim **Free** (volné otáčení mapy)
   - Režim **North Up** (sever vždy nahoře)
   - Režim **Course Up** (automatické otáčení podle směru jízdy) - **TBD, doplnit později**
+- **Cache mapových podkladů:**
+  - Stažené mapové dlaždice se ukládají lokálně do cache zařízení.
+  - Při opakovaném zobrazení stejné oblasti se přednostně použijí dlaždice z cache.
+  - Již načtená oblast mapy musí být dostupná i bez internetového připojení.
+  - Cache má mít omezenou velikost nebo možnost ručního vymazání, aby nekontrolovaně nerostla.
 - **Ovládání záznamu jízdy:**
   - Tlačítko **START** - spustí záznam nové jízdy
   - Tlačítko **PAUSE** - pozastaví záznam (GPS body se zaznamenávají dále, ale čas běží)
   - Tlačítko **STOP** - zastaví záznam a uloží jízdu do GPX + databáze
 - **Úspora energie během jízdy:**
-  - Po 30 sekundách nečinnosti (cas lze menit v Nastaveni) se obrazovka automaticky vypne
-  - GPS zůstává zapnutý a aplikace pořád zaznamenává polohu
-  - Stisknutí Power Button (nebo kliknutí na obrazovku) ji na 30 sekund zapne (Nastaveni)
-  - Vypnutí ostatních funkcí (WiFi, Bluetooth, NFC) kvůli úspoře baterie
+  - Po čase nastaveném v Settings přejde aplikace do úsporného režimu i bez aktivního nahrávání.
+  - Úsporný režim se chová stejně na obrazovkách Live Map, Ride Statistics, Route Management i Settings a není závislý na aktivním nahrávání.
+  - Úsporný režim zobrazí černý overlay, nastaví jas okna na 0 a použije Android `PARTIAL_WAKE_LOCK`, aby GPS a potřebné zpracování mohly pokračovat.
+  - Při zapnutém nahrávání zůstává GPS aktivní i při vypnuté obrazovce nebo na pozadí.
+  - Při vypnutém nahrávání běží GPS pouze při aktivně zobrazené Live Map.
+  - Úsporný režim se probouzí dotykem obrazovky; první dotyk pouze probudí aplikaci a neprovede žádnou akci pod overlayem.
+  - Stisknutí Power tlačítka je systémová akce a může aktivovat zamykací obrazovku s PINem nebo gestem.
+  - Při odchodu do jiné aplikace se aplikace nesnaží obcházet zabezpečení telefonu; pokud Android aktivuje zámek obrazovky, vyžádá standardní PIN, gesto nebo jiný nastavený způsob odemknutí.
+  - Ovládání WiFi, Bluetooth a NFC aplikace nepřebírá; jejich vypínání řeší uživatel nebo systém.
 
 ### 2. Ride Statistics (Porovnání jízd)
 - Porovnání aktuální jízdy s předchozími jízdami
@@ -149,6 +159,8 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 
 ### Offline funkčnost
 - Všechna data (GPX + SQLite) uložena lokálně na zařízení
+- Mapové dlaždice již navštívených oblastí jsou dostupné z lokální cache i bez internetu
+- Při nedostupném internetu aplikace zobrazí dostupnou cache a nesmí kvůli tomu spadnout
 - Aplikace funguje bez internetového připojení
 - Při exportu se GPX soubor sdílí (email, cloud, atd.)
 
@@ -185,15 +197,15 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - Caching mapových tiles pro offline zobrazení
 
 ### Úspora energie během záznamu
-- **Partial Wake Lock** - CPU běží, ale telefon se neusne
-- **Automatické vypínání displeje** - po 30 sekundách nečinnosti se obrazovka vypne
+- **Partial Wake Lock** - CPU a GPS mohou pokračovat při vypnutém displeji
+- **Automatické vypínání displeje** - po nastaveném čase nečinnosti se použije černý overlay a jas 0
 - **Minimální jas** - pokud se obrazovka zapne, svítí s minimálním jasem (5-10%)
 - **Vypnutí zbytečných funkcí:**
   - WiFi (zbytečné během jízdy)
   - Bluetooth (zbytečné)
   - NFC (zbytečné)
   - GPS zůstává zapnutý (povinný)
-- **Probuzení Power Button:** Stisknutí Power Button nebo kliknutí na obrazovku ji zapne na 30 sekund
+- **Probuzení:** První dotyk probudí aplikaci bez provedení překryté akce a návrat aplikace do popředí obnoví jas a obsah
 - **Výsledek:** Dlouhá výdrž baterie + pořád se zaznamenává GPS poloha
 
 ### Offline Funkčnost
@@ -205,11 +217,11 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 
 ### Phase 1: MVP (Minimální funkční verze)
 **Cíl:** Základní záznam jízdy a ukládání
-- [ ] Jednoduchá mapa (bez virtuálních závodníků)
-- [ ] Záznam jízdy: START/STOP (bez PAUSE)
-- [ ] Uložení do GPX souboru
-- [ ] Základní SQLite databáze (Routes, Rides tabulky)
-- [ ] Jednoduchý Settings screen (Nick, perioda ukládání)
+- [x] Jednoduchá mapa (bez virtuálních závodníků)
+- [x] Záznam jízdy: START/STOP (bez PAUSE)
+- [x] Uložení do GPX souboru
+- [x] Základní SQLite databáze (Routes, Rides tabulky)
+- [x] Jednoduchý Settings screen (Nick, perioda ukládání)
 - [ ] Úspora energie (Wake Lock, vypínání displeje)
 - **Doba:** 2-3 týdny
 

@@ -23,6 +23,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _errorMessage;
   String? _nickError;
 
+  String _formatTimeout(int seconds) {
+    final minutes = seconds ~/ 60;
+    final remainingSeconds = seconds % 60;
+    if (minutes == 0) return '${remainingSeconds}s';
+    return remainingSeconds == 0
+        ? '${minutes}min'
+        : '${minutes}min ${remainingSeconds}s';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -152,11 +161,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
           // Error message
           if (_errorMessage != null)
             Padding(
@@ -268,11 +280,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // Screen Off Timeout Slider
           const Text(
-            'Screen Off Timeout (recording)',
+            'Screen Off Timeout',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const Text(
-            'Dim screen after inactivity while recording',
+            'Dim screen after inactivity',
             style: TextStyle(fontSize: 12, color: Colors.grey),
           ),
           const SizedBox(height: 8),
@@ -280,19 +292,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: Slider(
-                  value: _screenOffTimeoutSeconds,
-                  min: 10,
-                  max: 120,
-                  divisions: 22,
-                  label: '${_screenOffTimeoutSeconds.toInt()}s',
+                  value: (_screenOffTimeoutSeconds / 60).clamp(0.5, 15.0),
+                  min: 0.5,
+                  max: 15.0,
+                  divisions: 29,
+                  label: _formatTimeout(_screenOffTimeoutSeconds.round()),
                   onChanged: (value) {
                     setState(() {
-                      _screenOffTimeoutSeconds = value;
+                      _screenOffTimeoutSeconds = value * 60;
                     });
                   },
                 ),
               ),
-              Text('${_screenOffTimeoutSeconds.toInt()}s'),
+              Text(_formatTimeout(_screenOffTimeoutSeconds.round())),
             ],
           ),
           const SizedBox(height: 24),
@@ -326,11 +338,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Text('$_numRidesToDisplay'),
             ],
           ),
-          const SizedBox(height: 32),
-
-          // Save Button
-          SizedBox(
+              ],
+            ),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Container(
             width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16.0, 8.0, 16.0, 12.0),
+            decoration: BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              border: Border(
+                top: BorderSide(color: Colors.grey.shade300),
+              ),
+            ),
             child: ElevatedButton(
               onPressed: (_isLoading || _nickError != null) ? null : _saveSettings,
               style: ElevatedButton.styleFrom(
@@ -353,9 +375,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
             ),
           ),
-          const SizedBox(height: 16),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
