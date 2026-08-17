@@ -222,19 +222,10 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - [x] Uložení do GPX souboru
 - [x] Základní SQLite databáze (Routes, Rides tabulky)
 - [x] Jednoduchý Settings screen (Nick, perioda ukládání)
-- [ ] Úspora energie (Wake Lock, vypínání displeje)
+- [x] Úspora energie (Wake Lock, vypínání displeje)
 - **Doba:** 2-3 týdny
 
-### Phase 2: Real-time Srovnávání
-**Cíl:** Motivace během jízdy
-- [ ] Virtuální závodníci na mapě
-- [ ] Real-time ranking (X/Y)
-- [ ] Časový rozdíl oproti vyšší pozici
-- [ ] Motivační indikátor (barva - zelená/červená)
-- [ ] Ride Statistics screen
-- **Doba:** 2-3 týdny
-
-### Phase 3: Správa Tras a Jízd
+### Phase 2: Správa Tras a Jízd
 **Cíl:** Organizace a úprava dat
 - [ ] Route Management screen
 - [ ] Vytvoření nové trasy / Výběr stávající
@@ -243,6 +234,15 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - [ ] Smazání jízd
 - [ ] Pause button v záznamu
 - **Doba:** 2 týdny
+
+### Phase 3: Real-time Srovnávání
+**Cíl:** Motivace během jízdy nad připravenými trasami a uloženými jízdami
+- [ ] Virtuální závodníci na mapě
+- [ ] Real-time ranking (X/Y)
+- [ ] Časový rozdíl oproti vyšší pozici
+- [ ] Motivační indikátor (barva - zelená/červená)
+- [ ] Ride Statistics screen
+- **Doba:** 2-3 týdny
 
 ### Phase 4: Import/Export & Offline
 **Cíl:** Sdílení a offline funkčnost

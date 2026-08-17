@@ -19,10 +19,10 @@ Funkčnost:
 10. OpenStreetMap  - zobrazit na mapě - DONE
 11. START/STOP tlačítka - stav a logika - DONE
 12. GPX export - uložit jízdu - PRESUNUTO do Route Management
-13. Wake Lock - úspora baterie - ODLOZENO (vratime se pozdeji)
-14. Opravit zobrazeni mapy na realnem telefonu - IN PROGRESS
+13. Wake Lock a úsporný režim - DONE
+14. Opravit zobrazeni mapy na realnem telefonu - DONE
 
 Poznamky:
 - Bod 12 (GPX export) zustava soucasti Route Management.
-- Bod 13 je funkcni ve forme app-level dim rezimu, ale finalni podoba je odlozena.
-- Aktualni priorita je stabilni zobrazeni OpenStreetMap na realnem telefonu.
+- Bod 13 je implementovany jako globalni app-level usporneho rezimu s nastavitelnym timeoutem.
+- Phase 1 je timto uzavrena. Dalsi krok je Route Management pro pripravu tras a jizd ke srovnavani.
