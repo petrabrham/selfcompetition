@@ -55,17 +55,86 @@ Soucasne schema ma `start_lat`, `start_lon`, `end_lat` a `end_lon` jako `NOT NUL
 
 Overit a upravit vazbu:
 
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
 - `route_id` - volitelne; `NULL` znamena nezarazenou jizdu
-- `gpx_file_path`
-- `start_time`, `end_time`
-- `distance_meters`
-- `avg_speed_kmh`
-- `user_nick`
-- `created_at`
+- `gpx_filename` - nazev souboru v adresari `gpx/` (pro nami vytvorene soubory: `{nick}_{YYYY-MM-DD}_{HH-MM-SS}.gpx`; importovane mohou mit jine jmeno)
+- `user_nick` - nick uzivatele
+- `saved_at` - ISO 8601 cas prvniho zaznameaneho GPS bodu (absolutni cas ulozeni zaznamu)
+- `start_time` - ISO 8601 cas trimovaneho startu (prvni bod v uvazenem trimovani, muze se zmenit pri nastaveni start/end pozic trasy)
+- `duration_seconds` - ciste trvani jizdy v sekundach (vypocitano z trimovanych bodu)
+- `distance_meters` - vzdalenost vypocitana z GPX bodu
+- `avg_speed_kmh` - prumernym: distance_meters / duration_seconds
+- `updated_at` - cas posledni upravy (pro audit: trimovani, prerazeni trasy, atd.)
 
 Jizda muze byt ulozena bez vazby na trasu. Pri nevybrane nebo nezname trase se pouzije `route_id = NULL`; jizda se nesmi ztratit kvuli chybejicimu kontextu.
 
+**Trimovani jizd (dulezite pro fazi 3):**
+
+Uzivatel se muze pripravovat na jizdu jeste pred fyzickym vyrazem: zapne zaznam, ulozi telefon, ceka, ... Podobne na konci: jizda skoncil, ale vypina zaznam az pozdeji. GPX soubor obsahuje vsechny body od prvniho zapnuti do vypnuti.
+
+Pri nastaveni start a end pozic trasy (na mape) aplikace:
+1. Parsuje vsechny body z GPX souboru
+2. Najde prvni bod po start pozici (nejblizsi bodu)
+3. Najde posledni bod pred end pozici
+4. Prepocita `start_time` (cas tohoto bodu), `duration_seconds` a `distance_meters` podle trimovanych bodu
+5. Fyzicky nemenuje GPX soubor - jen se zmeni metadata v SQLite
+
+**Autodetekce pauz v jizde (v GPX):**
+
+Pokud je zapnuta v Settings, aplikace automaticky detekuje dlouhe cekani behem jizdy (semafory, zeleznicni prejezdy, atd.):
+- Hledaji se dvojice po sobe jdoucich bodu s:
+  - Vzdalenosti < `pause_max_distance` (default 20m)
+  - A casovym skokem > `pause_min_duration` (default 60 sekund)
+- Takove casti se vypoustejici z vypoctu `duration_seconds`
+- Vyhodne i pro zapauzovani: pokud uzivatel zapomene stiskout PAUSE, aplikace to zjisti
+- Funguje i pri importu GPX z externiho zdroje
+
+Pauzy se **detekuji automaticky** - neni treba ukladat samostatne. Vypocet je ciste z GPX bodu.
+
+Vzorek flow:
+- `saved_at: 14:30:00` - uzivatel zapnul zaznam (prvni bod v GPX)
+- [10 minut cekani - jsou body v GPX]
+- `start_time: 14:40:00` - uzivatel skutecne vyrazil (nastaveny start bod, nebo automaticky detekovan)
+- [45 minut jizdy]
+- **14:45:00 - semafor, pozice skoro stejna, ceka 1:30** ← detekuje se jako pausa
+- **14:46:30 - semafor skoncil, pokracuje v jizde**
+- `15:25:00` - uzivatel dorazil do cile
+- [5 minut cekani]
+- `15:30:00` - uzivatel vypnul zaznam (posledni bod v GPX)
+- **Vysledek:** `duration_seconds = (45 - 1:30) minut ≈ 2610 sekund` (bez detektovanych pauz)
+
+**GPX uloziste (novinka):**
+- Vsechny GPX soubory se ukladaji do jedineho adresare: `gpx/`
+- **Pojmenovani pro nami vytvorene soubory:** `{nick}_{YYYY-MM-DD}_{HH-MM-SS}.gpx`
+  - Pri kolizi (nahoda stejneho casu): `{nick}_{YYYY-MM-DD}_{HH-MM-SS}_01.gpx`, `_02.gpx`, atd.
+- **Importovane soubory:** Mohou mit jine pojmenovani, aplikace je akceptuje tak jak jsou (format pojmenovani neni dulezity pro beh aplikace, pouze pro nami vytvorene)
+- **Hlavni vyhody:**
+  - Jednoducha, flat struktura bez vnoreni
+  - Organizace resena v SQLite metadatech, ne v adresarech
+  - Flexibilnejsi - presun jizdy mezi trasami nemenive fyzickou strukturu
+  - Moznost logickeho prirazeni stejneho souboru k vice trasam
+  - Bezpecnejsi import - soubor existuje driv, nez metadata v DB
+
 SQLite cizi klic s nullable `route_id` tuto variantu podporuje. Dotazy pro nezarazene jizdy musi pouzivat `WHERE route_id IS NULL`, ne `route_id = ?`.
+
+### Settings (Aktualizace)
+
+Doplnit tabulku `Settings` o nove pole pro konfiguraci autodetekce pauz:
+
+- `id` (INTEGER PRIMARY KEY)
+- Existujici:
+  - `user_nick`
+  - `gps_recording_interval_seconds`
+  - `min_distance_for_gps_point`
+  - `num_rides_to_compare`
+- **Nove (pro autodetekci pauz):**
+  - `pause_detection_enabled` (BOOLEAN, default: 1/true)
+  - `pause_max_distance_meters` (INTEGER, default: 20) - maximalni vzdalenost mezi body, aby se pocitaly jako "stejne miste"
+  - `pause_min_duration_seconds` (INTEGER, default: 60) - minimalni cas skoku mezi body, aby se pocital jako pausa
+
+Tyto konstanty uzivateli umozni:
+- Vypnout autodetekci, pokud ji nechce (pause_detection_enabled = 0)
+- Upravit citlivost detekce podle svych potreby (napr. delsi minimalni cekani pro semafory v meste)
 
 ### Migrace existujicich dat
 
@@ -113,9 +182,16 @@ Prazdne uzivatelske trasy se nevytvareji. Trasa vznika az s prvni jizdou, nebo s
 1. START zahaji zaznam v aktualne vybrane trase.
 2. PAUSE a RESUME zachovaji prirazeni ke stejne trase.
 3. STOP dokonci zaznam, spocita statistiky a ulozi metadata.
-4. GPX soubor se ulozi do adresare odpovidajiciho identifikatoru trasy a jizdy.
-5. Pri chybe ulozeni se uzivateli zobrazi chyba a jizda zustane v pameti nebo v obnovitelnem stavu.
-6. Pokud je kontext trasy neznamy, ulozi se jizda jako nezarazena (`route_id = NULL`).
+4. **GPX soubor se ulozi do adresare `gpx/` s nazvem `{nick}_{YYYY-MM-DD}_{HH-MM-SS}.gpx`**
+   - Pri kolizi (nahodna duplikace stejneho casu): `{nick}_{YYYY-MM-DD}_{HH-MM-SS}_01.gpx`
+   - `gpx_filename` (bez cesty) se ulozi do SQLite
+5. **Inicialnim trimovanim (bez nastaveni trasy):**
+   - `saved_at` = cas prvniho zaznameaneho bodu (z GPX)
+   - `start_time` = `saved_at` (zatim nema trimovani)
+   - `duration_seconds` se vypocita z prvniho a posledniho bodu v GPX
+   - `distance_meters` se vypocita z vsech bodu
+6. Pri chybe ulozeni se uzivateli zobrazi chyba a jizda zustane v pameti nebo v obnovitelnem stavu.
+7. Pokud je kontext trasy neznamy, ulozi se jizda jako nezarazena (`route_id = NULL`).
 
 ### Sprava jizdy
 
@@ -134,9 +210,14 @@ U kazde jizdy musi byt mozne:
 1. Uzivatel zvoli jizdu a akci "Priradit k trase".
 2. Vybere existujici trasu, nebo vytvori novou.
 3. Aplikace zkontroluje, ze cilova trasa ma jmeno.
-4. Aktualizuje se pouze `route_id`; GPX soubor se neprepise, pokud to neni nutne.
-5. Pokud puvodni uzivatelska trasa po presunu nema zadnou jizdu, nabidne se jeji archivace nebo smazani.
-6. Jizda nikdy nesmi zmizet kvuli tomu, ze se stala nezaazenou.
+4. Aktualizuje se pouze `route_id` v SQLite; **GPX soubor v adresari `gpx/` se nemenuje** - stejny soubor muze byt logicky prirazen vic trasam
+5. **Prepocita se trimovani podle start/end pozic nove trasy:**
+   - Pokud je nova trasa ma nastavene start a end pozice, aplikace parsuje GPX
+   - Najde prvni bod po start pozici a posledni bod pred end pozici
+   - Prepocita: `start_time`, `duration_seconds`, `distance_meters`
+   - Aktualizuje se `updated_at`
+6. Pokud puvodni uzivatelska trasa po presunu nema zadnou jizdu, nabidne se jeji archivace nebo smazani.
+7. Jizda nikdy nesmi zmizet kvuli tomu, ze se stala nezaazenou.
 
 ## UI obrazovky
 
@@ -170,24 +251,31 @@ Doporucene odpovednosti:
 - `RouteService` - vyber trasy, validace a presuny jizd mezi `NULL` a konkretni trasou
 - `RideService` - zaznam jizdy a ulozeni do prave aktualni trasy
 - `GpxService` - generovani, cteni a umisteni GPX souboru
+- **`GpxProcessingService`** (nova) - parsing GPX bodu, trimovani podle start/end pozic, **autodetekce pauz** z GPS dat
 - `RouteManagementScreen` - seznamy, formulare a akce
 
-Prednost ma existujici service/singleton styl projektu. Novy `RouteService` pridat pouze pokud zjednodusi pravidla vyberu a presunu jizd.
+Prednost ma existujici service/singleton styl projektu. Novy `RouteService` pridat pouze pokud zjednodusi pravidla vyberu a presunu jizd. `GpxProcessingService` je dulezita pro spravne vypocty `duration_seconds` a vzdalenosti.
 
 ## Poradi implementace
 
-1. Ujasnit a migrovat databazove schema tras a jizd na nullable `route_id`.
-2. Implementovat bezpecne ukladani a zobrazovani neza razenych jizd.
-3. Doplnit CRUD operace pro trasy.
-4. Doplnit CRUD operace a agregace pro jizdy.
-5. Pridat persistentni aktualne vybranou trasu.
-6. Implementovat seznam tras.
-7. Implementovat detail trasy a seznam jizd.
-8. Implementovat vytvoreni a editaci trasy.
-9. Implementovat presun, export a mazani jizd.
-10. Napojit vyber trasy na START/STOP.
-11. Doplnit migracni, servisni a widget testy.
-12. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
+1. Ujasnit a migrovat databazove schema tras a jizd na nullable `route_id` (bez `end_time`, s `duration_seconds`, `saved_at`, `start_time`).
+2. Doplnit Settings o nove pole pro autodetekci pauz: `pause_detection_enabled`, `pause_max_distance_meters`, `pause_min_duration_seconds`.
+3. Implementovat bezpecne ukladani a zobrazovani neza razenych jizd.
+4. Doplnit CRUD operace pro trasy.
+5. Doplnit CRUD operace a agregace pro jizdy.
+6. **Implementovat GpxProcessingService:**
+   - Parsing GPX bodu z souboru
+   - Trimovani podle start/end pozic
+   - **Autodetekce pauz:** najiti dvojic bodu s vzdalenosti < pause_max_distance a casovym skokem > pause_min_duration
+   - Vypocet ciste duration_seconds a distance_meters (bez pauz)
+7. Pridat persistentni aktualne vybranou trasu.
+8. Implementovat seznam tras.
+9. Implementovat detail trasy a seznam jizd.
+10. Implementovat vytvoreni a editaci trasy, vcetne nastaveni start a end pozic (s prepocitanim trimovani jizd).
+11. Implementovat presun, export a mazani jizd (s aktualizaci trimovani pri zmene trasy).
+12. Napojit vyber trasy na START/STOP.
+13. Doplnit migracni, servisni a widget testy.
+14. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
 
 ## Akceptacni kriteria
 
@@ -200,6 +288,17 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 - Uzivatel muze priradit jizdu k jine trase bez ztraty GPX souboru.
 - Uzivatel muze smazat jizdu s potvrzenim.
 - Aktivni zaznam nelze omylem prepnout do jine trasy.
+- **Trimovani jizd:**
+  - Pri ulozeni jizdy se automaticky naplni `saved_at` (prvni bod) a `start_time = saved_at`
+  - Pri nastaveni start a end pozic trasy se prepocita trimovani: `start_time`, `duration_seconds`, `distance_meters`
+  - Pri presunu jizdy do jine trasy se prepocita trimovani podle start/end pozic nove trasy
+  - GPX soubor se nemeni - jen metadata v SQLite
+- **Autodetekce pauz:**
+  - Pokud je `pause_detection_enabled` zapnuta v Settings, aplikace detekuje dlouhe cekani z GPX dat
+  - Detekuje se: vzdalenost < `pause_max_distance_meters` (default 20m) AND cas skok > `pause_min_duration_seconds` (default 60s)
+  - Detektovane pauzy se vypoustejici z vypoctu `duration_seconds` a `distance_meters`
+  - Uzivatel muze autodetekci vypnout nebo upravit citlivost v Settings
+  - Funguje i pro importovane GPX soubory
 - Existujici data projdou migraci bez ztraty.
 - Data Phase 2 jsou pripravena pro vyber trasy a porovnavani ve Phase 3.
 
@@ -215,4 +314,4 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 
 - Zda se uzivatelska trasa vytvori pred prvni jizdou, nebo az pri prvnim ulozeni jizdy.
 - Zda se pri smazani posledni jizdy trasa automaticky archivuje, nebo se uzivateli nabidne potvrzene smazani.
-- Zda se zmena trasy projevi okamzite v adresarove strukture GPX, nebo pouze v SQLite metadatech.
+- **Zda se detektovane pauzy zobrazi uzivateli v detailu jizdy** (napr. jako seznam "detektovanych zastaveni") pro ověřování korektnosti detekce.

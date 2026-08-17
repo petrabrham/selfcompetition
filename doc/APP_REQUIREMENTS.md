@@ -91,6 +91,10 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - **Záznam jízdy:**
   - Perioda ukládání bodů (interval v sekundách/metrech)
   - Minimální vzdálenost pro uložení bodu (GPS přesnost)
+- **Detekce pauz v záznamu:**
+  - Povolit autodetekci pauz (on/off toggle)
+  - Maximální vzdálenost pro detekci pauzy (default: 20 metrů) - pokud se GPS bod pohne méně než tuto vzdálenost, považuje se za stejné místo
+  - Minimální doba pro detekci pauzy (default: 60 sekund) - pokud se čas mezi body změní více než tuto dobu, považuje se za pauzu
 - **Zobrazení dat:**
   - Počet zobrazovaných jízd na porovnání (Live Map a Ride Statistics)
 
