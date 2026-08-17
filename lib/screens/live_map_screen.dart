@@ -8,6 +8,8 @@ import '../services/gps_service.dart';
 import '../services/ride_service.dart';
 import '../services/database_service.dart';
 
+enum _MapOrientationMode { free, northUp }
+
 // Screens - Live Map screen
 class LiveMapScreen extends StatefulWidget {
   const LiveMapScreen({super.key});
@@ -20,7 +22,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     with WidgetsBindingObserver {
   static LatLng? _lastMapCenter;
   static double _lastMapZoom = 16;
+  static double _lastMapRotation = 0;
   static bool _lastFollowPosition = true;
+  static _MapOrientationMode _lastOrientationMode =
+      _MapOrientationMode.northUp;
 
   GPSPosition? _currentPosition;
   bool _isLoading = false;
@@ -28,6 +33,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   late MapController _mapController;
   bool _mapReady = false;
   bool _followPosition = true;
+  _MapOrientationMode _orientationMode = _MapOrientationMode.northUp;
   bool _isRecording = false;
   bool _isPaused = false;
   bool _screenDimmed = false;
@@ -43,6 +49,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     WidgetsBinding.instance.addObserver(this);
     _mapController = MapController();
     _followPosition = _lastFollowPosition;
+    _orientationMode = _lastOrientationMode;
     _setupGPSListener();
     _startLiveTracking();
     _restoreRecordingState();
@@ -133,9 +140,32 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     }
   }
 
+  bool get _isNorthUp => _orientationMode == _MapOrientationMode.northUp;
+
+  int get _rotationInteractionFlags => _isNorthUp
+      ? InteractiveFlag.all & ~InteractiveFlag.rotate
+      : InteractiveFlag.all;
+
+  void _toggleOrientationMode() {
+    setState(() {
+      _orientationMode = _isNorthUp
+          ? _MapOrientationMode.free
+          : _MapOrientationMode.northUp;
+      _lastOrientationMode = _orientationMode;
+    });
+
+    if (_isNorthUp) {
+      _lastMapRotation = 0;
+      if (_mapReady) {
+        _mapController.rotate(0);
+      }
+    }
+  }
+
   void _storeMapCamera(MapCamera camera) {
     _lastMapCenter = camera.center;
     _lastMapZoom = camera.zoom;
+    _lastMapRotation = camera.rotation;
   }
 
   void _scheduleScreenSleep() {
@@ -310,6 +340,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _lastFollowPosition = _followPosition;
+    _lastOrientationMode = _orientationMode;
     if (_mapReady) {
       _storeMapCamera(_mapController.camera);
     }
@@ -333,6 +364,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       options: MapOptions(
         initialCenter: center,
         initialZoom: _lastMapZoom,
+        initialRotation: _lastMapRotation,
+        interactionOptions: InteractionOptions(
+          flags: _rotationInteractionFlags,
+        ),
         onPositionChanged: (camera, hasGesture) {
           _storeMapCamera(camera);
           if (hasGesture && _followPosition && mounted) {
@@ -344,9 +379,16 @@ class _LiveMapScreenState extends State<LiveMapScreen>
         },
         onMapReady: () {
           if (_lastMapCenter != null) {
-            _mapController.move(_lastMapCenter!, _lastMapZoom);
+            _mapController.moveAndRotate(
+              _lastMapCenter!,
+              _lastMapZoom,
+              _isNorthUp ? 0 : _lastMapRotation,
+            );
           } else if (_followPosition && _currentPosition != null) {
             _centerMapOnPosition(_currentPosition!);
+            if (_isNorthUp) {
+              _mapController.rotate(0);
+            }
           }
 
           if (mounted) {
@@ -448,6 +490,17 @@ class _LiveMapScreenState extends State<LiveMapScreen>
                     : null,
                 child: Icon(
                   _followPosition ? Icons.my_location : Icons.location_searching,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Orientation mode: FREE / NORTH
+              FloatingActionButton(
+                mini: true,
+                backgroundColor: _isNorthUp ? Colors.indigo : Colors.grey,
+                onPressed: _toggleOrientationMode,
+                child: Icon(
+                  _isNorthUp ? Icons.explore_off : Icons.explore,
                   color: Colors.white,
                 ),
               ),

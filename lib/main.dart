@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'screens/live_map_screen.dart';
 import 'screens/ride_statistics_screen.dart';
 import 'screens/route_management_screen.dart';
 import 'screens/settings_screen.dart';
 import 'widgets/bottom_navigation.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
   runApp(const MyApp());
 }
 

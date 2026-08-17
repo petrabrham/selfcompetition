@@ -35,6 +35,10 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
   - Časová ztráta/zisk oproti nejrychlejsi jízdě na dane Trase
   - TBD - Motivační indikátor (barva - zeleně když se zlepšuje, červeně když se horší)
 - **Virtuální závodníci** na mapě (pozice ostatních jízd v reálném čase)
+- **Orientace mapy:**
+  - Režim **Free** (volné otáčení mapy)
+  - Režim **North Up** (sever vždy nahoře)
+  - Režim **Course Up** (automatické otáčení podle směru jízdy) - **TBD, doplnit později**
 - **Ovládání záznamu jízdy:**
   - Tlačítko **START** - spustí záznam nové jízdy
   - Tlačítko **PAUSE** - pozastaví záznam (GPS body se zaznamenávají dále, ale čas běží)
