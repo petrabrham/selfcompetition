@@ -9,6 +9,7 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 ## 🎯 Core Features (Prioritizováno)
 - [ ] Živá mapa zobrazující GPS pozici
 - [ ] Přepínání mezi obrazovkami (Live Map / Ride Statistics)
+- [ ] **Aktivní trasa** (perzistentní, nejvýše jedna, nastavuje se v Route Management)
 - [ ] Srovnávání aktuální jízdy s předchozími jízdami
 - [ ] **Real-time srovnávání během jízdy** (zobrazení aktuálního pořadí)
 - [ ] Základní statistiky jízd (vzdálenost, čas, porovnání)
@@ -29,6 +30,14 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - Mapa se automaticky centruje na aktuální pozici
 - Na hlavni obrazovce se ukazuje: aktualni cas, aktualni doba jizdy, ujeta vzdalenost, celkova vzdalenost, poradi, ztrata na nejrychlejsiho, ztrata na jizdu prede mnou
 - Možnost přepnutí na druhou obrazovku (Ride Statistics)
+- **Aktivní trasa se na Live Map pouze zobrazuje, nevybírá se zde:**
+  - Výběr a aktivace trasy probíhá výhradně na obrazovce Route Management.
+  - Live Map nemá tlačítko pro výběr trasy.
+  - Jméno aktivní trasy (nebo informace, že žádná není aktivní) se zobrazuje v horním panelu.
+- **Vykreslení nejlepší jízdy na aktivní trase:**
+  - Pokud je aktivní trasa nastavena a má alespoň jednu jízdu, na mapě se modrou čarou vykreslí GPX trasa jízdy s nejkratším `duration_seconds`.
+  - Pokud má aktivní trasa nastavený start a/nebo cíl (`start_lat/lon`, `end_lat/lon` nejsou `NULL`), zobrazí se odpovídající markery.
+  - Pokud není žádná trasa aktivní, ani pokud aktivní trasa nemá žádnou jízdu, mapa žádnou stopu ani markery nezobrazuje.
 - **Real-time údaje během jízdy:**
   - Aktuální vzdálenost, čas, rychlost
   - **Aktuální pořadí: "X/Y"** (např. "5/10" = aktuálně 5. místo z 10 jízd)
@@ -59,19 +68,30 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
   - Při odchodu do jiné aplikace se aplikace nesnaží obcházet zabezpečení telefonu; pokud Android aktivuje zámek obrazovky, vyžádá standardní PIN, gesto nebo jiný nastavený způsob odemknutí.
   - Ovládání WiFi, Bluetooth a NFC aplikace nepřebírá; jejich vypínání řeší uživatel nebo systém.
 
-### 2. Ride Statistics (Porovnání jízd)
-- Porovnání aktuální jízdy s předchozími jízdami
-- Zobrazované statistiky:
-  - Celková vzdálenost trasy v km
-  - Celkový čas jízdy
-  - Čas od startu do aktuálního bodu
-  - Časová ztráta oproti nejrychlejší jízdě na stejné trase
+### 2. Ride Statistics (Tabulka jízd aktivní trasy)
+- Zobrazuje tabulku všech jízd **aktivní trasy**, seřazenou podle času jízdy (od nejrychlejší).
+- Pokud není žádná trasa aktivní, obrazovka zobrazí prázdný stav s výzvou "Vyberte aktivní trasu ve Správě tras".
+- Sloupce tabulky pro každou jízdu:
+  - Datum a čas jízdy
+  - Vzdálenost (km, na 1 desetinné místo)
+  - Čas jízdy (`duration_seconds`, formát HH:mm)
+  - Průměrná rychlost (km/h)
+  - Časová ztráta oproti nejrychlejší jízdě na aktivní trase (rozdíl `duration_seconds` oproti nejlepší jízdě; u nejlepší jízdy je ztráta 0)
 - Možnost přepnutí zpět na Live Map
+- Živý ranking, virtuální závodníci a real-time porovnávání během jízdy zůstávají ve Phase 3 - tato obrazovka je statický přehled uložených jízd.
 
 ### 3. Route Management (Správa tras a jízd)
 - Výběr již uložené trasy pro trasování
 - Vytvoření nové trasy jízdou (během jízdy se vytvoří nová trasa)
 - Seznam všech jízd na vybrané trase
+- **Aktivace trasy:**
+  - Uživatel může u libovolné trasy nastavit ji jako aktivní (např. checkbox nebo přepínač u položky trasy).
+  - Aktivní je nejvýše jedna trasa současně; aktivací jiné trasy se předchozí aktivní trasa automaticky deaktivuje.
+  - Uživatel může aktivní trasu i deaktivovat, čímž se aplikace vrátí do stavu "žádná trasa není aktivní".
+  - Aktivní trasa je v seznamu vizuálně odlišena (zvýraznění nebo zaškrtnutý stav).
+  - Aktivní trasa se ukládá perzistentně (`Settings.active_route_id`) a obnovuje se po restartu aplikace.
+  - Smazání aktivní trasy nastaví `active_route_id` zpět na `NULL` (žádná trasa není aktivní).
+  - Nová jízda se automaticky přiřadí k aktivní trase; pokud žádná trasa není aktivní, jízda se uloží jako nezařazená (`route_id = NULL`).
 - **Úprava trasy:**
   - Nastavit startovní pozici na mapě
   - Nastavit cílovou pozici na mapě
@@ -84,6 +104,11 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
   - Exportovat do GPX formátu
   - Importovat GPX formát
   - Smazat jízdu
+- **Hromadný import GPX jízd (pro testování a rychlé naplnění dat):**
+  - GPX soubory se připraví do adresáře `gpx_import/` (např. přes `adb push`)
+  - Akce "Import GPX" v Route Management naimportuje všechny nalezené soubory jako nezařazené jízdy
+  - Pro každou jízdu se spočítá vzdálenost, čas a průměrná rychlost z GPX bodů
+  - Úspěšně importované soubory se přesunou do `gpx/`; neplatné zůstanou v `gpx_import/` a uživatel je informován souhrnnou hláškou
 
 ### 4. Settings (Nastavení)
 - **Uživatelský profil:**
@@ -101,22 +126,23 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 ## 🎮 Uživatelské akce (Use Cases)
 
 ### Záznam jízdy
-1. Uživatel otevře aplikaci, vybere trasu (nebo vytvoří novou)
+1. Uživatel volitelně nastaví aktivní trasu v Route Management (nebo ponechá žádnou aktivní)
 2. Klikne na Live Map → tlačítko **START**
 3. Aplikace začne zaznamenávat GPS body dle nastaveného intervalu
-4. Uživatel vidí v reálném čase:
+4. Nová jízda se automaticky přiřadí k aktivní trase; pokud žádná trasa není aktivní, jízda bude nezařazená
+5. Uživatel vidí v reálném čase:
    - Svou pozici na mapě
    - Virtuální pozice ostatních (konkurentů)
    - **Aktuální pořadí (X/Y)** - motivace ke zlepšení
    - Časový rozdíl oproti jízdě na vyšší pozici
-5. Uživatel může kterýmkoli okamžikem kliknout **PAUSE** (např. čekání na semaforu)
-6. Po zastavení klikne **STOP**
-7. Aplikace uloží jízdu do souboru `{route_id}/{ride_id}.gpx` a metadata do SQLite
+6. Uživatel může kterýmkoli okamžikem kliknout **PAUSE** (např. čekání na semaforu)
+7. Po zastavení klikne **STOP**
+8. Aplikace uloží jízdu do adresáře `gpx/` a metadata do SQLite (včetně přiřazené aktivní trasy nebo `route_id = NULL`)
 
 ### Porovnání jízd
 1. Po ukončení jízdy se automaticky přepne na Ride Statistics
-2. Aplikace vypočítá statistiky (vzdálenost, čas, srovnání s ostatními)
-3. Uživatel vidí, jak si stojí oproti nejrychlejší jízdě
+2. Aplikace zobrazí tabulku jízd aktivní trasy seřazenou podle času jízdy
+3. Uživatel vidí, jak si stojí oproti nejrychlejší jízdě (časová ztráta ve sloupci tabulky)
 
 ### Motivace a gamifikace
 - **Real-time ranking:** Uživatel vidí svou pozici během jízdy → motivuje k překonávání svých limitů
@@ -152,6 +178,7 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
     - Perioda ukládání bodů
     - Minimální vzdálenost pro uložení
     - Počet zobrazovaných jízd
+    - **`active_route_id`** - volitelný odkaz na aktuálně aktivní trasu (`NULL` = žádná trasa není aktivní)
     - Ostatní preference
 
 ### Detekce trasy
@@ -230,12 +257,17 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - **Doba:** 2-3 týdny
 
 ### Phase 2: Správa Tras a Jízd
-**Cíl:** Organizace a úprava dat
-- [ ] Route Management screen
-- [ ] Vytvoření nové trasy / Výběr stávající
+**Cíl:** Organizace a úprava dat, aktivní trasa, statické statistiky
+- [x] Route Management screen
+- [x] Vytvoření nové trasy / Výběr stávající
+- [x] Seznam jízd na trase (včetně nezařazených)
+- [x] Smažení jízd
+- [x] Přeřazení jízdy mezi trasami / do nezařazených
+- [x] Hromadný import GPX jízd z `gpx_import/` (nezařazené jízdy, pro testování)
 - [ ] Nastavení startu/cíle trasy na mapě
-- [ ] Seznam jízd na trase
-- [ ] Smazání jízd
+- [ ] **Aktivní trasa** - výběr a perzistence (`Settings.active_route_id`), zvýraznění v seznamu tras
+- [ ] Live Map: vykreslení nejlepší jízdy aktivní trasy (modrá stopa) a start/cíl markerů
+- [ ] Ride Statistics screen: statická tabulka jízd aktivní trasy (čas, vzdálenost, průměrná rychlost, ztráta na nejlepší čas)
 - [ ] Pause button v záznamu
 - **Doba:** 2 týdny
 
@@ -245,7 +277,6 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - [ ] Real-time ranking (X/Y)
 - [ ] Časový rozdíl oproti vyšší pozici
 - [ ] Motivační indikátor (barva - zelená/červená)
-- [ ] Ride Statistics screen
 - **Doba:** 2-3 týdny
 
 ### Phase 4: Import/Export & Offline

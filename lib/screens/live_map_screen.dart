@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import '../services/gps_service.dart';
+import '../services/gpx_service.dart';
 import '../services/ride_service.dart';
 import '../services/database_service.dart';
 
@@ -41,6 +42,9 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   bool _isRecording = false;
   bool _isPaused = false;
   bool _screenDimmed = false;
+  int? _activeRouteId;
+  String _activeRouteName = 'Žádná aktivní trasa';
+  String? _replayFileName;
   Duration _recordingDuration = Duration.zero;
   late Timer _timerTick;
   Timer? _screenSleepTimer;
@@ -59,6 +63,17 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     _startLiveTracking();
     _restoreRecordingState();
     _loadUserAndPosition();
+    _loadActiveRoute();
+  }
+
+  Future<void> _loadActiveRoute() async {
+    final routeId = await DatabaseService.instance.getActiveRouteId();
+    final route = routeId == null ? null : await DatabaseService.instance.getRoute(routeId);
+    if (!mounted) return;
+    setState(() {
+      _activeRouteId = routeId;
+      _activeRouteName = route?['name'] as String? ?? 'Žádná aktivní trasa';
+    });
   }
 
   void _restoreRecordingState() {
@@ -233,6 +248,55 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     _dimScreen();
   }
 
+  Future<void> _selectReplayRide() async {
+    final replayableFiles = await GpxService.instance.listTestRides();
+    if (!mounted) return;
+
+    final fileName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Přehrát uloženou jízdu'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: replayableFiles.isEmpty
+              ? const Text('V adresáři gpx_test nejsou žádné GPX soubory.')
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: replayableFiles.length,
+                  itemBuilder: (_, index) {
+                    final fileName = replayableFiles[index];
+                    return ListTile(
+                      title: Text(fileName),
+                      onTap: () => Navigator.pop(context, fileName),
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+    if (fileName == null || !mounted) return;
+
+    try {
+      final positions = await GpxService.instance.loadTestRide(fileName);
+      final started = await GPSService.instance.startReplay(positions);
+      if (!started) throw StateError('GPX neobsahuje žádné GPS body.');
+      setState(() => _replayFileName = fileName);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Replay se nepodařilo spustit: $error')),
+      );
+    }
+  }
+
+  Future<void> _stopReplay() async {
+    await GPSService.instance.stopReplay();
+    if (mounted) {
+      setState(() => _replayFileName = null);
+      _startLiveTracking();
+    }
+  }
+
   Future<void> _setRecordingKeepScreenOn(bool enabled) async {
     try {
       await _powerChannel.invokeMethod<void>(
@@ -351,7 +415,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
 
   /// Začni záznam jízdy
   Future<void> _startRecording() async {
-    await RideService.instance.startRecording(userId: _userNick);
+    await RideService.instance.startRecording(
+      userId: _userNick,
+      routeId: _activeRouteId,
+    );
     await _setRecordingKeepScreenOn(true);
     
     setState(() {
@@ -646,64 +713,74 @@ class _LiveMapScreenState extends State<LiveMapScreen>
             padding: const EdgeInsets.all(12.0),
             child: SafeArea(
               top: false,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 4.0),
-                child: !_isRecording
-                  ? Row(
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: ElevatedButton.icon(
-                          onPressed: _startRecording,
-                          icon: const Icon(Icons.play_arrow),
-                          label: const Text('START RECORDING'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!_isRecording)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.route, size: 18, color: Colors.grey),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Aktivní trasa: $_activeRouteName',
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (kDebugMode)
+                    OutlinedButton.icon(
+                      onPressed: _replayFileName == null
+                          ? _selectReplayRide
+                          : _stopReplay,
+                      icon: Icon(
+                        _replayFileName == null ? Icons.replay : Icons.stop,
+                      ),
+                      label: Text(
+                        _replayFileName == null
+                            ? 'Replay GPX'
+                            : 'Stop replay: $_replayFileName',
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4.0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 2,
+                          child: ElevatedButton.icon(
+                            onPressed: _isRecording ? _stopRecording : _startRecording,
+                            icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
+                            label: Text(_isRecording ? 'STOP' : 'START RECORDING'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _isRecording ? Colors.red : Colors.green,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _sleepNow,
-                          icon: const Icon(Icons.bedtime),
-                          label: const Text('SLEEP'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.indigo,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _isRecording ? _togglePause : _sleepNow,
+                            icon: Icon(_isRecording
+                                ? (_isPaused ? Icons.play_arrow : Icons.pause)
+                                : Icons.bedtime),
+                            label: Text(_isRecording
+                                ? (_isPaused ? 'RESUME' : 'PAUSE')
+                                : 'SLEEP'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _isRecording ? Colors.orange : Colors.indigo,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  )
-                : Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _stopRecording,
-                          icon: const Icon(Icons.stop),
-                          label: const Text('STOP'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.red,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _togglePause,
-                          icon: Icon(_isPaused ? Icons.play_arrow : Icons.pause),
-                          label: Text(_isPaused ? 'RESUME' : 'PAUSE'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                          ),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
+                ],
               ),
             ),
           ),

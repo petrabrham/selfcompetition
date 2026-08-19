@@ -59,6 +59,7 @@ class RideService {
   bool _isRecording = false;
   bool _isPaused = false;
   String? _lastError;
+  int? _selectedRouteId;
 
   RideService._internal();
 
@@ -72,8 +73,10 @@ class RideService {
 
   String? get lastError => _lastError;
 
+  int? get selectedRouteId => _selectedRouteId;
+
   /// Začni záznam nové jízdy
-  Future<void> startRecording({required String userId}) async {
+  Future<void> startRecording({required String userId, int? routeId}) async {
     _lastError = null;
     if (_isRecording) {
       _lastError = 'Already recording';
@@ -88,6 +91,7 @@ class RideService {
       positions: [],
     );
     _currentRide!.userId = userId;
+      _selectedRouteId = routeId;
     _isRecording = true;
     _isPaused = false;
 
@@ -100,6 +104,13 @@ class RideService {
 
     // Nastartuj GPS listener
     GPSService.instance.addPositionListener(_onPositionUpdate);
+
+    // Keep the start point even when a short recording ends before the next
+    // periodic GPS stream update arrives.
+    final currentPosition = GPSService.instance.currentPosition;
+    if (currentPosition != null) {
+      _currentRide!.addPosition(currentPosition);
+    }
   }
 
   /// GPS position update callback
@@ -146,13 +157,22 @@ class RideService {
 
     // Ulož do databáze
     try {
-      const routeId = 0;
+      final routeId = _selectedRouteId;
       if (kDebugMode) {
-        debugPrint('Ride: Saving with route_id=0 (Route Management not implemented yet)');
+        debugPrint('Ride: Saving with route_id=$routeId');
       }
+      
+      // Generate GPX first to get filename
+      final gpxFilename = await GpxService.instance.saveRide(
+        userNick: _currentRide!.userId ?? 'Unknown',
+        startTime: _currentRide!.startTime,
+        positions: _currentRide!.positions,
+      );
+
+      // Save ride metadata to DB with GPX filename
       final rideId = await DatabaseService.instance.insertRide({
         'route_id': routeId,
-        'gpx_file_path': '',
+        'gpx_file_path': gpxFilename, // Now just the filename
         'start_time': _currentRide!.startTime.toIso8601String(),
         'end_time': _currentRide!.endTime!.toIso8601String(),
         'distance_meters': _currentRide!.totalDistance,
@@ -161,20 +181,9 @@ class RideService {
         'created_at': DateTime.now().toIso8601String(),
       });
 
-      final gpxPath = await GpxService.instance.saveRide(
-        routeId: routeId,
-        rideId: rideId,
-        userNick: _currentRide!.userId ?? 'Unknown',
-        startTime: _currentRide!.startTime,
-        positions: _currentRide!.positions,
-      );
-      await DatabaseService.instance.updateRide(rideId, {
-        'gpx_file_path': gpxPath,
-      });
-
       if (kDebugMode) {
         debugPrint('Ride saved to DB with ID: $rideId');
-        debugPrint('GPX saved to: $gpxPath');
+        debugPrint('GPX saved to: gpx/$gpxFilename');
         debugPrint('GPX points: ${_currentRide!.positions.length}');
       }
 
@@ -207,6 +216,7 @@ class RideService {
     if (_isRecording) {
       _isRecording = false;
       _isPaused = false;
+      _selectedRouteId = null;
       _currentRide = null;
       if (kDebugMode) {
         debugPrint('Ride: Recording cancelled');
@@ -218,4 +228,69 @@ class RideService {
   void cleanup() {
     GPSService.instance.removePositionListener(_onPositionUpdate);
   }
+
+  /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.
+  Future<ImportResult> importGpxFiles() async {
+    final fileNames = await GpxService.instance.listImportableFiles();
+    var importedCount = 0;
+    final failed = <String, String>{};
+    if (fileNames.isEmpty) return ImportResult(imported: 0, failed: failed);
+
+    final settings = await DatabaseService.instance.getSettings();
+    final userNick = settings?['user_nick'] as String? ?? 'Import';
+
+    for (final fileName in fileNames) {
+      try {
+        final positions = await GpxService.instance.loadImportFile(fileName);
+        if (positions.isEmpty) {
+          failed[fileName] = 'GPX neobsahuje žádné GPS body';
+          continue;
+        }
+
+        double distanceMeters = 0;
+        for (var i = 1; i < positions.length; i++) {
+          distanceMeters += GPSService.calculateDistance(
+            positions[i - 1].latitude,
+            positions[i - 1].longitude,
+            positions[i].latitude,
+            positions[i].longitude,
+          );
+        }
+
+        final startTime = positions.first.timestamp;
+        final endTime = positions.last.timestamp;
+        final durationSeconds = endTime.difference(startTime).inSeconds;
+        final avgSpeedKmh = durationSeconds > 0
+            ? (distanceMeters / 1000) / (durationSeconds / 3600)
+            : 0.0;
+
+        final finalFileName =
+            await GpxService.instance.moveImportedFileToGpx(fileName);
+
+        await DatabaseService.instance.insertRide({
+          'route_id': null,
+          'gpx_file_path': finalFileName,
+          'start_time': startTime.toIso8601String(),
+          'end_time': endTime.toIso8601String(),
+          'distance_meters': distanceMeters,
+          'avg_speed_kmh': avgSpeedKmh,
+          'user_nick': userNick,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+
+        importedCount++;
+      } catch (e) {
+        failed[fileName] = e.toString();
+      }
+    }
+
+    return ImportResult(imported: importedCount, failed: failed);
+  }
+}
+
+class ImportResult {
+  final int imported;
+  final Map<String, String> failed;
+
+  ImportResult({required this.imported, required this.failed});
 }

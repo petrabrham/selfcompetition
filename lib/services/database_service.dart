@@ -26,7 +26,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 2,
+      version: 4,
       onCreate: _createTables,
       onUpgrade: _upgradeDatabase,
     );
@@ -38,20 +38,77 @@ class DatabaseService {
         'ALTER TABLE Settings ADD COLUMN screen_off_timeout_seconds INTEGER DEFAULT 30',
       );
     }
+    if (oldVersion < 3) {
+      // Phase 2 Migration: Make Routes start/end nullable, Rides route_id nullable
+      
+      // Migrate Routes to have nullable start/end positions
+      await db.execute('''
+        CREATE TABLE Routes_new(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          description TEXT,
+          start_lat REAL,
+          start_lon REAL,
+          end_lat REAL,
+          end_lon REAL,
+          tolerance_radius REAL DEFAULT 50.0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute('INSERT INTO Routes_new SELECT * FROM Routes');
+      await db.execute('DROP TABLE Routes');
+      await db.execute('ALTER TABLE Routes_new RENAME TO Routes');
+      
+      // Migrate Rides table to have nullable route_id (Phase 2 unassigned rides)
+      await db.execute('''
+        CREATE TABLE Rides_new(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          route_id INTEGER,
+          gpx_file_path TEXT,
+          start_time TEXT NOT NULL,
+          end_time TEXT,
+          distance_meters REAL DEFAULT 0.0,
+          avg_speed_kmh REAL DEFAULT 0.0,
+          user_nick TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (route_id) REFERENCES Routes(id)
+        )
+      ''');
+      // Copy data: convert route_id = 0 to NULL for unassigned rides
+      await db.execute('''
+        INSERT INTO Rides_new(id, route_id, gpx_file_path, start_time, end_time, 
+                              distance_meters, avg_speed_kmh, user_nick, created_at)
+        SELECT id, 
+               CASE WHEN route_id = 0 THEN NULL ELSE route_id END,
+               gpx_file_path, start_time, end_time,
+               distance_meters, avg_speed_kmh, user_nick, created_at
+        FROM Rides
+      ''');
+      await db.execute('DROP TABLE Rides');
+      await db.execute('ALTER TABLE Rides_new RENAME TO Rides');
+    }
+    if (oldVersion < 4) {
+      // Phase 2: persistent active route selection
+      await db.execute(
+        'ALTER TABLE Settings ADD COLUMN active_route_id INTEGER',
+      );
+    }
   }
 
   /// Create all tables
   Future<void> _createTables(Database db, int version) async {
     // Routes table - stores route definitions
+    // Phase 2: start/end positions are optional - routes can be created without them
     await db.execute('''
       CREATE TABLE Routes(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         description TEXT,
-        start_lat REAL NOT NULL,
-        start_lon REAL NOT NULL,
-        end_lat REAL NOT NULL,
-        end_lon REAL NOT NULL,
+        start_lat REAL,
+        start_lon REAL,
+        end_lat REAL,
+        end_lon REAL,
         tolerance_radius REAL DEFAULT 50.0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -59,10 +116,11 @@ class DatabaseService {
     ''');
 
     // Rides table - stores individual ride recordings
+    // route_id is nullable: NULL means unassigned ride (Phase 2 feature)
     await db.execute('''
       CREATE TABLE Rides(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        route_id INTEGER NOT NULL,
+        route_id INTEGER,
         gpx_file_path TEXT,
         start_time TEXT NOT NULL,
         end_time TEXT,
@@ -83,6 +141,7 @@ class DatabaseService {
         min_distance_threshold_meters REAL DEFAULT 5.0,
         num_rides_to_display INTEGER DEFAULT 3,
         screen_off_timeout_seconds INTEGER DEFAULT 30,
+        active_route_id INTEGER,
         updated_at TEXT NOT NULL
       )
     ''');
@@ -114,6 +173,12 @@ class DatabaseService {
     return result.isNotEmpty ? result.first : null;
   }
 
+  /// Get all routes
+  Future<List<Map<String, dynamic>>> getRoutes() async {
+    final db = await database;
+    return await db.query('Routes', orderBy: 'name ASC');
+  }
+
   /// Insert new route
   Future<int> insertRoute(Map<String, dynamic> route) async {
     final db = await database;
@@ -134,7 +199,21 @@ class DatabaseService {
   /// Delete route
   Future<int> deleteRoute(int id) async {
     final db = await database;
+    if (await getActiveRouteId() == id) {
+      await setActiveRouteId(null);
+    }
     return await db.delete('Routes', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Get the currently active route id (null if none is active)
+  Future<int?> getActiveRouteId() async {
+    final settings = await getSettings();
+    return settings?['active_route_id'] as int?;
+  }
+
+  /// Set the active route (null deactivates any route)
+  Future<void> setActiveRouteId(int? routeId) async {
+    await updateSettings({'active_route_id': routeId});
   }
 
   /// ============ RIDES OPERATIONS ============
@@ -152,6 +231,16 @@ class DatabaseService {
       'Rides',
       where: 'route_id = ?',
       whereArgs: [routeId],
+      orderBy: 'start_time DESC',
+    );
+  }
+
+  /// Get unassigned rides (route_id IS NULL)
+  Future<List<Map<String, dynamic>>> getRidesWithoutRoute() async {
+    final db = await database;
+    return await db.query(
+      'Rides',
+      where: 'route_id IS NULL',
       orderBy: 'start_time DESC',
     );
   }

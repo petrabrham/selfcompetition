@@ -13,6 +13,47 @@ Vytvorit spolehlivou spravu tras a ulozenych jizd tak, aby bylo mozne:
 
 Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stabilni datovy a uzivatelsky zaklad pro Phase 3.
 
+## Import GPX jizd
+
+1. Uzivatel muze do aplikace hromadne importovat existujici GPX soubory (napr. pro testovani nebo prevod historickych dat), bez nutnosti fyzicky jezdit s aplikaci.
+2. Soubory se pripravi do adresare `gpx_import/` (nahrani napr. pres `adb push` nebo Device Explorer).
+3. V Route Management je akce "Import GPX (gpx_import/)", ktera pro kazdy nalezeny `.gpx` soubor:
+   - naparsuje GPS body,
+   - spocita `distance_meters` (soucet Haversine vzdalenosti mezi body), `start_time`/`end_time` (prvni/posledni bod) a `avg_speed_kmh`,
+   - presune soubor do `gpx/` (kolize reseny stejne jako u zaznamu jizdy, pripona `_01`, `_02`, ...),
+   - vlozi novy zaznam do `Rides` jako nezarazenou jizdu (`route_id = NULL`), s `user_nick` z aktualnich `Settings`.
+4. Soubory bez pouzitelnych GPS bodu se neimportuji a zustanou v `gpx_import/`; uzivatel je informovan souhrnnou hlaskou (pocet importovanych, pocet selhanych).
+5. Import nijak nemeni uz importovane/ulozene jizdy - je to jednorazova operace nad aktualnim obsahem `gpx_import/`.
+6. Importovane jizdy lze nasledne stejne jako ostatni nezarazene jizdy presunout k trase, prejmenovat kontext nebo smazat.
+7. Import je urcen predevsim pro testovani a rychle naplneni databaze daty; nenahrazuje Phase 4 pozadavek na import/export sdilenych GPX souboru (napr. z jinych aplikaci) - ten muze na tomto zakladu stavet.
+
+## Aktivni trasa
+
+1. Aktivni trasa je globalni, perzistentni stav ulozeny v `Settings.active_route_id` (nullable).
+2. Nejvyse jedna trasa muze byt aktivni soucasne; vychozi stav (napr. prvni spusteni) je zadna aktivni trasa.
+3. Aktivaci a deaktivaci trasy provadi uzivatel vyhradne v Route Management (napr. checkbox nebo prepinac u polozky trasy).
+4. Aktivaci jine trasy se predchozi aktivni trasa automaticky deaktivuje (nikdy nejsou aktivni dve trasy soucasne).
+5. Aktivni trasa je v seznamu vizualne odlisena (zvyrazneni nebo oznaceny stav).
+6. Live Map nema tlacitko pro vyber trasy - pouze zobrazuje jmeno aktivni trasy (nebo informaci, ze zadna neni aktivni).
+7. Nova jizda se automaticky priradi k aktivni trase; pokud zadna trasa neni aktivni, jizda se ulozi jako nezarazena (`route_id = NULL`).
+8. Smazani aktivni trasy nastavi `active_route_id` zpet na `NULL`.
+9. Aktivni trasa se obnovuje po restartu aplikace ze `Settings`.
+
+### Vykresleni nejlepsi jizdy na Live Map
+
+1. Pokud je trasa aktivni a ma alespon jednu jizdu, aplikace najde jizdu s nejnizsim `duration_seconds` ("nejlepsi cas").
+2. GPX teto jizdy se naparsuje a vykresli na mape modrou carou.
+3. Pokud ma aktivni trasa nastaveny start a/nebo cil (`start_lat/lon`, `end_lat/lon` nejsou `NULL`), zobrazi se prislusne markery.
+4. Pokud zadna trasa neni aktivni, nebo aktivni trasa nema zadnou jizdu, mapa nezobrazuje zadnou stopu ani markery.
+
+### Ride Statistics (staticka tabulka)
+
+1. Obrazovka zobrazuje tabulku jizd aktivni trasy, serazenou vzestupne podle `duration_seconds` (nejrychlejsi nahore).
+2. Sloupce: datum a cas jizdy, vzdalenost (km, 1 desetinne misto), cas jizdy (HH:mm), prumerna rychlost (km/h), casova ztrata oproti nejlepsimu casu.
+3. Jizda s nejlepsim casem ma ztratu 0.
+4. Pokud zadna trasa neni aktivni, obrazovka zobrazi prazdny stav s vyzvou "Vyberte aktivni trasu ve Sprave tras".
+5. Zivy ranking, virtualni zavodnici a realtime porovnavani zustavaji mimo rozsah Phase 2 (viz Phase 3).
+
 ## Zakladni pravidla
 
 ### Trasy
@@ -131,6 +172,8 @@ Doplnit tabulku `Settings` o nove pole pro konfiguraci autodetekce pauz:
   - `pause_detection_enabled` (BOOLEAN, default: 1/true)
   - `pause_max_distance_meters` (INTEGER, default: 20) - maximalni vzdalenost mezi body, aby se pocitaly jako "stejne miste"
   - `pause_min_duration_seconds` (INTEGER, default: 60) - minimalni cas skoku mezi body, aby se pocital jako pausa
+- **Nove (pro aktivni trasu):**
+  - `active_route_id` (INTEGER, nullable, FK na `Routes.id`) - aktualne aktivni trasa; `NULL` = zadna trasa neni aktivni
 
 Tyto konstanty uzivateli umozni:
 - Vypnout autodetekci, pokud ji nechce (pause_detection_enabled = 0)
@@ -171,15 +214,15 @@ Prazdne uzivatelske trasy se nevytvareji. Trasa vznika az s prvni jizdou, nebo s
 
 ### Vyber trasy pro novou jizdu
 
-1. Uzivatel ve sprave tras vybere trasu.
-2. Vybrana trasa se ulozi jako aktualni kontext pro Live Map.
-3. START vytvori novou jizdu s touto trasou.
-4. Pokud neni vybrana zadna uzivatelska trasa, jizda se ulozi jako nezarazena (`route_id = NULL`).
-5. Po restartu aplikace se vybrana trasa obnovi, nebo se pouziji nezarazene jizdy.
+1. Uzivatel ve sprave tras aktivuje trasu (checkbox/prepinac u polozky).
+2. Aktivace se ulozi perzistentne do `Settings.active_route_id`; predchozi aktivni trasa se deaktivuje.
+3. START na Live Map vytvori novou jizdu s aktualne aktivni trasou - vyber se na Live Map neprovadi.
+4. Pokud neni aktivni zadna trasa, jizda se ulozi jako nezarazena (`route_id = NULL`).
+5. Po restartu aplikace se aktivni trasa obnovi ze `Settings`.
 
 ### Ulozeni jizdy
 
-1. START zahaji zaznam v aktualne vybrane trase.
+1. START zahaji zaznam v aktualne aktivni trase.
 2. PAUSE a RESUME zachovaji prirazeni ke stejne trase.
 3. STOP dokonci zaznam, spocita statistiky a ulozi metadata.
 4. **GPX soubor se ulozi do adresare `gpx/` s nazvem `{nick}_{YYYY-MM-DD}_{HH-MM-SS}.gpx`**
@@ -210,7 +253,7 @@ U kazde jizdy musi byt mozne:
 1. Uzivatel zvoli jizdu a akci "Priradit k trase".
 2. Vybere existujici trasu, nebo vytvori novou.
 3. Aplikace zkontroluje, ze cilova trasa ma jmeno.
-4. Aktualizuje se pouze `route_id` v SQLite; **GPX soubor v adresari `gpx/` se nemenuje** - stejny soubor muze byt logicky prirazen vic trasam
+4. Aktualizuje se pouze `route_id` a případně `updated_at` v SQLite; **GPX soubor v adresáři `gpx/` se nepřesouvá** - stejný soubor zůstává na místě
 5. **Prepocita se trimovani podle start/end pozic nove trasy:**
    - Pokud je nova trasa ma nastavene start a end pozice, aplikace parsuje GPX
    - Najde prvni bod po start pozici a posledni bod pred end pozici
@@ -237,11 +280,14 @@ Implementovat postupne:
 
 Doplnit:
 
-- zobrazeni aktualne vybrane trasy,
-- vyber trasy pred START,
+- zobrazeni jmena aktivni trasy (nebo informace, ze zadna neni aktivni) v hornim panelu,
+- vykresleni GPX stopy jizdy s nejlepsim casem na aktivni trase (modra cara),
+- zobrazeni start/cil markeru aktivni trasy, pokud jsou nastaveny,
 - jasnou informaci, kdy se jizda uklada do "Nezarazene jizdy",
-- zabraneni zmene trasy uprostred aktivniho zaznamu,
+- zabraneni zmene aktivni trasy uprostred aktivniho zaznamu,
 - bezpecne chovani pri navratu na Live Map.
+
+Live Map jiz nema tlacitko pro vyber trasy - vyber a aktivace probiha vyhradne v Route Management.
 
 ## Servisni vrstvy
 
@@ -268,14 +314,16 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
    - Trimovani podle start/end pozic
    - **Autodetekce pauz:** najiti dvojic bodu s vzdalenosti < pause_max_distance a casovym skokem > pause_min_duration
    - Vypocet ciste duration_seconds a distance_meters (bez pauz)
-7. Pridat persistentni aktualne vybranou trasu.
-8. Implementovat seznam tras.
+7. Pridat persistentni aktivni trasu (`Settings.active_route_id`) a UI pro jeji aktivaci/deaktivaci v Route Management.
+8. Implementovat seznam tras vcetne zvyrazneni aktivni trasy.
 9. Implementovat detail trasy a seznam jizd.
 10. Implementovat vytvoreni a editaci trasy, vcetne nastaveni start a end pozic (s prepocitanim trimovani jizd).
 11. Implementovat presun, export a mazani jizd (s aktualizaci trimovani pri zmene trasy).
-12. Napojit vyber trasy na START/STOP.
-13. Doplnit migracni, servisni a widget testy.
-14. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
+12. Napojit Live Map na aktivni trasu: zobrazeni jmena, vykresleni nejlepsi jizdy (modra cara) a start/cil markeru; odstranit vyber trasy z Live Map.
+13. Implementovat Ride Statistics jako statickou tabulku jizd aktivni trasy (razeni podle casu, sloupce dle specifikace vyse).
+14. Implementovat import GPX jizd z adresare `gpx_import/` (bez zavislosti na dalsich krocich, lze i drive kvuli testovani).
+15. Doplnit migracni, servisni a widget testy.
+16. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
 
 ## Akceptacni kriteria
 
@@ -288,6 +336,21 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 - Uzivatel muze priradit jizdu k jine trase bez ztraty GPX souboru.
 - Uzivatel muze smazat jizdu s potvrzenim.
 - Aktivni zaznam nelze omylem prepnout do jine trasy.
+- **Aktivni trasa:**
+  - Nejvyse jedna trasa je aktivni soucasne; vychozi stav je zadna aktivni trasa.
+  - Aktivace/deaktivace probiha vyhradne v Route Management a je vizualne zvyrazena.
+  - Aktivace jine trasy automaticky deaktivuje predchozi aktivni trasu.
+  - Aktivni trasa se uklada do `Settings.active_route_id` a obnovuje se po restartu aplikace.
+  - Smazani aktivni trasy nastavi `active_route_id` na `NULL`.
+  - Nova jizda se automaticky priradi k aktivni trase; bez aktivni trasy je jizda nezarazena.
+  - Live Map nema tlacitko pro vyber trasy, pouze zobrazuje jmeno aktivni trasy.
+  - Live Map vykresli modrou carou GPX jizdy s nejnizsim `duration_seconds` na aktivni trase, a start/cil markery, pokud jsou nastaveny.
+  - Ride Statistics zobrazuje statickou tabulku jizd aktivni trasy serazenou podle casu, s casovou ztratou oproti nejlepsimu casu; bez aktivni trasy zobrazi vyzvu k vyberu trasy.
+- **Import GPX jizd:**
+  - GPX soubory v `gpx_import/` lze hromadne importovat jako nezarazene jizdy jednou akci v Route Management.
+  - Importovane jizdy maji spocitane `distance_meters`, `start_time`, `end_time` a `avg_speed_kmh` z GPX bodu.
+  - Uspesne importovane soubory se presunou do `gpx/`; soubory bez pouzitelnych bodu zustanou v `gpx_import/` a uzivatel je informovan.
+  - Import nesmaze ani neprepise jiz existujici jizdy v databazi.
 - **Trimovani jizd:**
   - Pri ulozeni jizdy se automaticky naplni `saved_at` (prvni bod) a `start_time = saved_at`
   - Pri nastaveni start a end pozic trasy se prepocita trimovani: `start_time`, `duration_seconds`, `distance_meters`
@@ -315,3 +378,10 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 - Zda se uzivatelska trasa vytvori pred prvni jizdou, nebo az pri prvnim ulozeni jizdy.
 - Zda se pri smazani posledni jizdy trasa automaticky archivuje, nebo se uzivateli nabidne potvrzene smazani.
 - **Zda se detektovane pauzy zobrazi uzivateli v detailu jizdy** (napr. jako seznam "detektovanych zastaveni") pro ověřování korektnosti detekce.
+
+### Vyresene otazky (aktivni trasa)
+
+- Nejlepsi cas na trase = nejnizsi `duration_seconds` (ciste trvani bez pauz), ne nejvyssi prumerna rychlost ani nejkratsi vzdalenost.
+- Smazani aktivni trasy nastavi `Settings.active_route_id` na `NULL` (zadna trasa neni aktivni), bez blokovani mazani.
+- Ride Statistics bez aktivni trasy zobrazi prazdny stav s vyzvou "Vyberte aktivni trasu ve Sprave tras" (nezobrazuje se tabulka nezarazenych jizd).
+- Staticka tabulka jizd a modra stopa nejlepsi jizdy patri do Phase 2; zivy ranking a virtualni zavodnici zustavaji ve Phase 3.

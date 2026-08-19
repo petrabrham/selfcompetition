@@ -37,6 +37,8 @@ class GPSService {
   bool _isTracking = false;
   Stream<Position>? _positionStream;
   StreamSubscription<Position>? _positionSubscription;
+  Timer? _replayTimer;
+  bool _isReplaying = false;
 
   // Callback for position updates
   final List<Function(GPSPosition)> _positionListeners = [];
@@ -48,6 +50,8 @@ class GPSService {
 
   /// Check if GPS is currently tracking
   bool get isTracking => _isTracking;
+
+  bool get isReplaying => _isReplaying;
 
   /// Check location services availability and permissions
   Future<bool> checkLocationPermission() async {
@@ -185,9 +189,58 @@ class GPSService {
     }
   }
 
+  /// Replay recorded positions through the same listener pipeline as live GPS.
+  Future<bool> startReplay(
+    List<GPSPosition> positions, {
+    double speedMultiplier = 1.0,
+  }) async {
+    if (positions.isEmpty) return false;
+    if (speedMultiplier <= 0) return false;
+    await stopTracking();
+    _isReplaying = true;
+    var index = 0;
+
+    void emitNext() {
+      if (!_isReplaying || index >= positions.length) {
+        stopReplay();
+        return;
+      }
+      final currentIndex = index++;
+      _currentPosition = positions[currentIndex];
+      _notifyListeners(_currentPosition!);
+
+      if (index < positions.length && _isReplaying) {
+        final elapsed = positions[index].timestamp.difference(
+          positions[currentIndex].timestamp,
+        );
+        final delay = Duration(
+          microseconds: (elapsed.inMicroseconds / speedMultiplier).round(),
+        );
+        _replayTimer = Timer(
+          delay.isNegative || delay == Duration.zero
+              ? const Duration(milliseconds: 1)
+              : delay,
+          emitNext,
+        );
+      } else if (index >= positions.length) {
+        stopReplay();
+      }
+    }
+
+    emitNext();
+    return true;
+  }
+
+  Future<void> stopReplay() async {
+    _isReplaying = false;
+    _replayTimer?.cancel();
+    _replayTimer = null;
+  }
+
   /// Stop GPS tracking
   Future<void> stopTracking() async {
     try {
+      await stopReplay();
       _isTracking = false;
       await _positionSubscription?.cancel();
       _positionSubscription = null;
