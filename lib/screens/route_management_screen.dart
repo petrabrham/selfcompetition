@@ -1,7 +1,10 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import '../services/database_service.dart';
+import '../services/gps_service.dart';
 import '../services/gpx_service.dart';
 import '../services/ride_service.dart';
+import 'map_position_picker_screen.dart';
 
 class RouteManagementScreen extends StatefulWidget {
   const RouteManagementScreen({super.key});
@@ -337,5 +340,83 @@ class _RouteFormScreenState extends State<RouteFormScreen> {
   double? n(String x) => x.trim().isEmpty ? null : double.tryParse(x.trim());
   Future<void> save() async { if (!key.currentState!.validate()) return; setState(() => saving = true); final now = DateTime.now().toIso8601String(); final r = <String,dynamic>{'name': name.text.trim(), 'description': description.text.trim().isEmpty ? null : description.text.trim(), 'start_lat': n(startLat.text), 'start_lon': n(startLon.text), 'end_lat': n(endLat.text), 'end_lon': n(endLon.text), 'tolerance_radius': n(tolerance.text) ?? 50.0, 'updated_at': now}; try { if (widget.routeId == null) { r['created_at'] = now; await DatabaseService.instance.insertRoute(r); } else { await DatabaseService.instance.updateRoute(widget.routeId!, r); } if (mounted) Navigator.pop(context); } catch (e) { if (mounted) { setState(() => saving = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Chyba: $e'))); } } }
   Widget field(TextEditingController c, String label) => TextFormField(controller: c, decoration: InputDecoration(labelText: label), keyboardType: const TextInputType.numberWithOptions(decimal: true), validator: (x) => x != null && x.trim().isNotEmpty && n(x) == null ? 'Zadejte číslo' : null);
-  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.routeId == null ? 'Nová Trasa' : 'Upravit Trasu')), body: loading ? const Center(child: CircularProgressIndicator()) : Form(key: key, child: ListView(padding: const EdgeInsets.all(16), children: [TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Název *'), validator: (x) => x == null || x.trim().isEmpty ? 'Název trasy je povinný' : null), TextFormField(controller: description, decoration: const InputDecoration(labelText: 'Popis'), maxLines: 3), field(startLat, 'Start latitude'), field(startLon, 'Start longitude'), field(endLat, 'End latitude'), field(endLon, 'End longitude'), field(tolerance, 'Toleranční radius'), const SizedBox(height: 20), ElevatedButton(onPressed: saving ? null : save, child: Text(saving ? 'Ukládám...' : 'Uložit'))])));
+
+  Future<void> pickFromMap(TextEditingController latController, TextEditingController lonController, String title, {required bool useLastGpxPosition}) async {
+    final currentLat = double.tryParse(latController.text.trim());
+    final currentLon = double.tryParse(lonController.text.trim());
+    final initial = (currentLat != null && currentLon != null)
+        ? LatLng(currentLat, currentLon)
+        : await _initialGpxPosition(useLastGpxPosition);
+    if (!mounted) return;
+    final result = await Navigator.of(context).push<LatLng>(
+      MaterialPageRoute(builder: (_) => MapPositionPickerScreen(title: title, initialPosition: initial)),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      latController.text = result.latitude.toStringAsFixed(6);
+      lonController.text = result.longitude.toStringAsFixed(6);
+    });
+  }
+
+  /// Výchozí pozice pro picker - bod z aktivní trasy, jinak aktuální GPS pozice.
+  /// Pokud ani ta není dostupná, MapPositionPickerScreen sám spadne na Prahu.
+  Future<LatLng?> _initialGpxPosition(bool useLastGpxPosition) async {
+    final activeRouteId = await DatabaseService.instance.getActiveRouteId();
+    if (activeRouteId != null) {
+      final rides = await DatabaseService.instance.getRidesByRoute(activeRouteId);
+      final position = await _positionFromRides(rides, useLastGpxPosition);
+      if (position != null) return position;
+    }
+    return _currentGpsPosition();
+  }
+
+  Future<LatLng?> _currentGpsPosition() async {
+    final cached = GPSService.instance.currentPosition;
+    if (cached != null) return LatLng(cached.latitude, cached.longitude);
+    final position = await GPSService.instance.getCurrentPosition();
+    return position == null ? null : LatLng(position.latitude, position.longitude);
+  }
+
+  Future<LatLng?> _positionFromRides(
+    List<Map<String, dynamic>> rides,
+    bool useLastGpxPosition,
+  ) async {
+    for (final ride in rides) {
+      final fileName = ride['gpx_file_path'] as String?;
+      if (fileName == null || fileName.isEmpty) continue;
+      try {
+        final positions = await GpxService.instance.loadRide(fileName);
+        if (positions.isNotEmpty) {
+          final position = useLastGpxPosition ? positions.last : positions.first;
+          return LatLng(position.latitude, position.longitude);
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  Widget positionFields(TextEditingController latController, TextEditingController lonController, String label, String pickerTitle, {required bool useLastGpxPosition}) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Expanded(child: field(latController, '$label latitude')),
+          const SizedBox(width: 8),
+          Expanded(child: field(lonController, '$label longitude')),
+        ],
+      ),
+      Align(
+        alignment: Alignment.centerRight,
+        child: TextButton.icon(
+          onPressed: () => pickFromMap(latController, lonController, pickerTitle, useLastGpxPosition: useLastGpxPosition),
+          icon: const Icon(Icons.map_outlined),
+          label: const Text('Zadat z mapy'),
+        ),
+      ),
+    ],
+  );
+
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.routeId == null ? 'Nová Trasa' : 'Upravit Trasu')), body: loading ? const Center(child: CircularProgressIndicator()) : Form(key: key, child: ListView(padding: const EdgeInsets.all(16), children: [TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Název *'), validator: (x) => x == null || x.trim().isEmpty ? 'Název trasy je povinný' : null), TextFormField(controller: description, decoration: const InputDecoration(labelText: 'Popis'), maxLines: 3), positionFields(startLat, startLon, 'Start', 'Vyberte start na mapě', useLastGpxPosition: false), const SizedBox(height: 12), positionFields(endLat, endLon, 'End', 'Vyberte cíl na mapě', useLastGpxPosition: true), field(tolerance, 'Toleranční radius'), const SizedBox(height: 20), ElevatedButton(onPressed: saving ? null : save, child: Text(saving ? 'Ukládám...' : 'Uložit'))])));
 }

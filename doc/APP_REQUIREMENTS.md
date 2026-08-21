@@ -264,7 +264,7 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - [x] Smažení jízd
 - [x] Přeřazení jízdy mezi trasami / do nezařazených
 - [x] Hromadný import GPX jízd z `gpx_import/` (nezařazené jízdy, pro testování)
-- [ ] Nastavení startu/cíle trasy na mapě
+- [x] Nastavení startu/cíle trasy na mapě
 - [ ] **Aktivní trasa** - výběr a perzistence (`Settings.active_route_id`), zvýraznění v seznamu tras
 - [ ] Live Map: vykreslení nejlepší jízdy aktivní trasy (modrá stopa) a start/cíl markerů
 - [ ] Ride Statistics screen: statická tabulka jízd aktivní trasy (čas, vzdálenost, průměrná rychlost, ztráta na nejlepší čas)

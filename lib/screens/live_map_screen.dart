@@ -44,6 +44,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   bool _screenDimmed = false;
   int? _activeRouteId;
   String _activeRouteName = 'Žádná aktivní trasa';
+  Map<String, dynamic>? _activeRoute;
   String? _replayFileName;
   Duration _recordingDuration = Duration.zero;
   late Timer _timerTick;
@@ -73,6 +74,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     setState(() {
       _activeRouteId = routeId;
       _activeRouteName = route?['name'] as String? ?? 'Žádná aktivní trasa';
+      _activeRoute = route;
     });
   }
 
@@ -572,6 +574,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.selfcompetition',
         ),
+        if (_activeRoute != null) _buildRouteToleranceCircles(_activeRoute!),
         if (_currentPosition != null)
           MarkerLayer(
             markers: [
@@ -592,6 +595,32 @@ class _LiveMapScreenState extends State<LiveMapScreen>
           ),
       ],
     );
+  }
+
+  CircleLayer _buildRouteToleranceCircles(Map<String, dynamic> route) {
+    final tolerance = (route['tolerance_radius'] as num?)?.toDouble() ?? 0;
+    final circleRadius = tolerance / 2;
+    final circles = <CircleMarker>[];
+
+    void addCircle(String latKey, String lonKey, Color color) {
+      final latitude = (route[latKey] as num?)?.toDouble();
+      final longitude = (route[lonKey] as num?)?.toDouble();
+      if (latitude == null || longitude == null || circleRadius <= 0) return;
+      circles.add(
+        CircleMarker(
+          point: LatLng(latitude, longitude),
+          radius: circleRadius,
+          useRadiusInMeter: true,
+          color: color.withValues(alpha: 0.25),
+          borderColor: color,
+          borderStrokeWidth: 2,
+        ),
+      );
+    }
+
+    addCircle('start_lat', 'start_lon', Colors.green);
+    addCircle('end_lat', 'end_lon', Colors.red);
+    return CircleLayer(circles: circles);
   }
 
   @override
