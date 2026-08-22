@@ -48,7 +48,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _screenSleepTimer;
   bool _screenDimmed = false;
   bool _settingsLoaded = false;
-  String _activeRouteName = 'Žádná aktivní trasa';
 
   List<Widget> get _screens => [
         LiveMapScreen(onSleepRequested: _dimScreen),
@@ -62,16 +61,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadPowerSettings();
-    _loadActiveRouteName();
-  }
-
-  Future<void> _loadActiveRouteName() async {
-    final routeId = await DatabaseService.instance.getActiveRouteId();
-    final route = routeId == null ? null : await DatabaseService.instance.getRoute(routeId);
-    if (!mounted) return;
-    setState(() {
-      _activeRouteName = route?['name'] as String? ?? 'Žádná aktivní trasa';
-    });
   }
 
   Future<void> _loadPowerSettings() async {
@@ -124,7 +113,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() {
       _currentIndex = index;
     });
-    _loadActiveRouteName();
   }
 
   @override
@@ -151,24 +139,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           children: [
             // Header placeholder - currently unused, reserved for state info
             Container(
-              color: Theme.of(context).colorScheme.surface,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Self Competition',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  // State info placeholder (e.g., selected route)
-                  Text(
-                    _activeRouteName,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: Colors.grey,
-                        ),
-                  ),
-                ],
-              ),
+              color: Colors.white,
+              height: 48,
             ),
             Expanded(
               child: GestureDetector(

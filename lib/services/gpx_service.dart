@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:gpx/gpx.dart';
 import 'package:path/path.dart' as path;
@@ -48,9 +49,8 @@ class GpxService {
 
 	/// List GPX files waiting to be imported from gpx_import/.
 	Future<List<String>> listImportableFiles() async {
-		final documentsDirectory = await getApplicationDocumentsDirectory();
-		final directory = Directory(path.join(documentsDirectory.path, 'gpx_import'));
-		if (!await directory.exists()) return [];
+		final directory = await importDirectory;
+		if (!await directory.exists()) await directory.create(recursive: true);
 
 		final files = await directory
 			.list()
@@ -59,6 +59,31 @@ class GpxService {
 			.toList();
 		files.sort();
 		return files;
+	}
+
+	Future<Directory> get importDirectory async {
+		final documentsDirectory = await getApplicationDocumentsDirectory();
+		return Directory(path.join(documentsDirectory.path, 'gpx_import'));
+	}
+
+	Future<String> getImportDirectoryPath() async => (await importDirectory).path;
+
+	Future<String> saveImportedBytes(String fileName, Uint8List bytes) async {
+		final documentsDirectory = await getApplicationDocumentsDirectory();
+		final directory = Directory(path.join(documentsDirectory.path, 'gpx'));
+		await directory.create(recursive: true);
+
+		var finalFileName = fileName;
+		var finalFilePath = path.join(directory.path, finalFileName);
+		var counter = 1;
+		final nameWithoutExt = fileName.replaceFirst(RegExp(r'\.gpx$', caseSensitive: false), '');
+		while (File(finalFilePath).existsSync()) {
+			finalFileName = '${nameWithoutExt}_${counter.toString().padLeft(2, '0')}.gpx';
+			finalFilePath = path.join(directory.path, finalFileName);
+			counter++;
+		}
+		await File(finalFilePath).writeAsBytes(bytes);
+		return finalFileName;
 	}
 
 	/// Load positions from a file waiting in gpx_import/.

@@ -8,14 +8,20 @@ import '../services/gps_service.dart';
 import '../services/gpx_service.dart';
 import '../services/ride_service.dart';
 import '../services/database_service.dart';
+import '../widgets/bottom_navigation.dart';
 
 enum _MapOrientationMode { free, northUp }
 
 // Screens - Live Map screen
 class LiveMapScreen extends StatefulWidget {
   final VoidCallback? onSleepRequested;
+  final String? selectedRideFileName;
 
-  const LiveMapScreen({super.key, this.onSleepRequested});
+  const LiveMapScreen({
+    super.key,
+    this.onSleepRequested,
+    this.selectedRideFileName,
+  });
 
   @override
   State<LiveMapScreen> createState() => _LiveMapScreenState();
@@ -43,8 +49,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   bool _isPaused = false;
   bool _screenDimmed = false;
   int? _activeRouteId;
-  String _activeRouteName = 'Žádná aktivní trasa';
+  String _activeRouteName = 'No active route';
   Map<String, dynamic>? _activeRoute;
+  List<LatLng> _bestRouteTrack = [];
+    List<LatLng> _selectedRideTrack = [];
   String? _replayFileName;
   Duration _recordingDuration = Duration.zero;
   late Timer _timerTick;
@@ -65,17 +73,103 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     _restoreRecordingState();
     _loadUserAndPosition();
     _loadActiveRoute();
+    _loadSelectedRide();
+  }
+
+  Future<void> _loadSelectedRide() async {
+    final fileName = widget.selectedRideFileName;
+    if (fileName == null || fileName.isEmpty) return;
+    try {
+      final positions = await GpxService.instance.loadRide(fileName);
+      if (!mounted) return;
+      setState(() {
+        _selectedRideTrack = positions
+            .map((position) => LatLng(position.latitude, position.longitude))
+            .toList();
+      });
+    } catch (_) {
+      // The map remains usable if the selected GPX file is unavailable.
+    }
   }
 
   Future<void> _loadActiveRoute() async {
     final routeId = await DatabaseService.instance.getActiveRouteId();
     final route = routeId == null ? null : await DatabaseService.instance.getRoute(routeId);
+    final bestTrack = route == null ? <LatLng>[] : await _loadBestRouteTrack(route);
     if (!mounted) return;
     setState(() {
       _activeRouteId = routeId;
-      _activeRouteName = route?['name'] as String? ?? 'Žádná aktivní trasa';
+      _activeRouteName = route?['name'] as String? ?? 'No active route';
       _activeRoute = route;
+      _bestRouteTrack = bestTrack;
     });
+  }
+
+  Future<List<LatLng>> _loadBestRouteTrack(Map<String, dynamic> route) async {
+    final routeId = route['id'] as int?;
+    if (routeId == null) return [];
+    final mainRideId = await DatabaseService.instance.getMainRideId(routeId);
+    if (mainRideId == null) return [];
+    final mainRide = await DatabaseService.instance.getRide(mainRideId);
+    final fileName = mainRide?['gpx_file_path'] as String?;
+    if (fileName == null || fileName.isEmpty) return [];
+
+    try {
+      final positions = await GpxService.instance.loadRide(fileName);
+      final trimmed = _trimRoutePositions(positions, route);
+      return trimmed
+          .map((position) => LatLng(position.latitude, position.longitude))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  List<GPSPosition> _trimRoutePositions(
+    List<GPSPosition> positions,
+    Map<String, dynamic> route,
+  ) {
+    if (positions.length < 2) return positions;
+    var startIndex = 0;
+    var endIndex = positions.length - 1;
+
+    final start = _routePoint(route, 'start_lat', 'start_lon');
+    final end = _routePoint(route, 'end_lat', 'end_lon');
+    if (start != null) startIndex = _closestPositionIndex(positions, start);
+    if (end != null) endIndex = _closestPositionIndex(positions, end);
+    if (startIndex >= endIndex) return positions;
+    return positions.sublist(startIndex, endIndex + 1);
+  }
+
+  LatLng? _routePoint(
+    Map<String, dynamic> route,
+    String latitudeKey,
+    String longitudeKey,
+  ) {
+    final latitude = (route[latitudeKey] as num?)?.toDouble();
+    final longitude = (route[longitudeKey] as num?)?.toDouble();
+    return latitude == null || longitude == null
+        ? null
+        : LatLng(latitude, longitude);
+  }
+
+  int _closestPositionIndex(List<GPSPosition> positions, LatLng target) {
+    var closestIndex = 0;
+    var closestDistance = double.infinity;
+    for (var index = 0; index < positions.length; index++) {
+      final position = positions[index];
+      final distance = GPSService.calculateDistance(
+        position.latitude,
+        position.longitude,
+        target.latitude,
+        target.longitude,
+      );
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestIndex = index;
+      }
+    }
+    return closestIndex;
   }
 
   void _restoreRecordingState() {
@@ -257,11 +351,11 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     final fileName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Přehrát uloženou jízdu'),
+        title: const Text('Replay saved ride'),
         content: SizedBox(
           width: double.maxFinite,
           child: replayableFiles.isEmpty
-              ? const Text('V adresáři gpx_test nejsou žádné GPX soubory.')
+              ? const Text('No GPX files found in gpx_test.')
               : ListView.builder(
                   shrinkWrap: true,
                   itemCount: replayableFiles.length,
@@ -281,12 +375,12 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     try {
       final positions = await GpxService.instance.loadTestRide(fileName);
       final started = await GPSService.instance.startReplay(positions);
-      if (!started) throw StateError('GPX neobsahuje žádné GPS body.');
+      if (!started) throw StateError('The GPX file contains no GPS points.');
       setState(() => _replayFileName = fileName);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Replay se nepodařilo spustit: $error')),
+        SnackBar(content: Text('Could not start replay: $error')),
       );
     }
   }
@@ -574,6 +668,26 @@ class _LiveMapScreenState extends State<LiveMapScreen>
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.selfcompetition',
         ),
+        if (_bestRouteTrack.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _bestRouteTrack,
+                color: Colors.blue,
+                strokeWidth: 4,
+              ),
+            ],
+          ),
+        if (_selectedRideTrack.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _selectedRideTrack,
+                color: Colors.green,
+                strokeWidth: 4,
+              ),
+            ],
+          ),
         if (_activeRoute != null) _buildRouteToleranceCircles(_activeRoute!),
         if (_currentPosition != null)
           MarkerLayer(
@@ -625,7 +739,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final mapContent = GestureDetector(
       behavior: HitTestBehavior.translucent,
       child: Stack(
         fit: StackFit.expand,
@@ -754,7 +868,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
                           const Icon(Icons.route, size: 18, color: Colors.grey),
                           const SizedBox(width: 6),
                           Text(
-                            'Aktivní trasa: $_activeRouteName',
+                            'Active route: $_activeRouteName',
                             style: const TextStyle(color: Colors.grey),
                           ),
                         ],
@@ -814,8 +928,31 @@ class _LiveMapScreenState extends State<LiveMapScreen>
             ),
           ),
         ),
+
+        if (_selectedRideTrack.length >= 2)
+          Positioned(
+            right: 16,
+            bottom: 150,
+            child: FloatingActionButton.small(
+              heroTag: 'clear-selected-ride',
+              backgroundColor: Colors.green,
+              onPressed: () => setState(() => _selectedRideTrack = []),
+              child: const Icon(Icons.close, color: Colors.white),
+            ),
+          ),
       ],
       ),
     );
+
+    if (widget.selectedRideFileName != null) {
+      return Scaffold(
+        body: mapContent,
+        bottomNavigationBar: AppBottomNavigation(
+          currentIndex: 0,
+          onTap: (_) => Navigator.of(context).pop(),
+        ),
+      );
+    }
+    return mapContent;
   }
 }

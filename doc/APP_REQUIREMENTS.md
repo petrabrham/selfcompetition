@@ -6,6 +6,12 @@
 
 _Aplikace pro sledování a srovnávání cyklistických jízd_
 
+### Jazyk uživatelského rozhraní
+
+- Všechny texty viditelné uživateli musí být v angličtině: názvy obrazovek, tlačítka, popisky, dialogy, validační zprávy, chybová hlášení, tooltipy i prázdné stavy.
+- Aktuální verze aplikace podporuje pouze angličtinu.
+- Vícejazyčné UI bude případně doplněno později pomocí standardní Flutter lokalizace; implementace jednotlivých obrazovek s tím musí být slučitelná.
+
 ## 🎯 Core Features (Prioritizováno)
 - [ ] Živá mapa zobrazující GPS pozici
 - [ ] Přepínání mezi obrazovkami (Live Map / Ride Statistics)
@@ -99,16 +105,23 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
     - Jízda začíná od prvního průchodu startovní pozicí
     - Jízda končí posledním průchodem cílovou pozicí
   - Pokud start/cíl nejsou zadány: jízdy se používají jak jsou
+- **Hlavní jízda trasy (plánováno):**
+  - Nová trasa začíná s `main_ride_id = NULL`; první úspěšně přiřazená jízda se stane hlavní.
+  - Uživatel může u jízdy použít kontextovou akci "Set as main ride for route".
+  - Před přiřazením při zastavení záznamu, importu, přeřazení i změně hlavní jízdy se ověří GPX bod v tolerančním kruhu explicitního startu/cíle; neexplicitní hranice používají první/poslední bod GPX hlavní jízdy.
+  - Při neúspěchu zůstane jízda nezařazená (`route_id = NULL`); neúspěšná změna hlavní jízdy zachová původní volbu.
+  - Po smazání nebo přesunu hlavní jízdy se náhrada vybere podle nejdřívějšího `start_time`, potom nejnižšího `id`; bez náhrady se nastaví `NULL`.
+  - Hlavní jízda je odlišná od nejrychlejší jízdy používané pro modrou referenční čáru; nejrychlejší se vybírá podle nejnižšího `duration_seconds`.
 - Možnosti pro každou jízdu:
   - Zobrazit offline (bez internetu)
   - Exportovat do GPX formátu
   - Importovat GPX formát
   - Smazat jízdu
 - **Hromadný import GPX jízd (pro testování a rychlé naplnění dat):**
-  - GPX soubory se připraví do adresáře `gpx_import/` (např. přes `adb push`)
-  - Akce "Import GPX" v Route Management naimportuje všechny nalezené soubory jako nezařazené jízdy
+  - Akce "Import GPX" v Route Management otevře systémový výběr souborů
+  - Uživatel může vybrat jeden nebo více `.gpx` souborů z `Downloads`, `Documents` nebo jiného dostupného umístění
   - Pro každou jízdu se spočítá vzdálenost, čas a průměrná rychlost z GPX bodů
-  - Úspěšně importované soubory se přesunou do `gpx/`; neplatné zůstanou v `gpx_import/` a uživatel je informován souhrnnou hláškou
+  - Úspěšně importované soubory se uloží do interního `gpx/` adresáře a uživatel je informován souhrnnou hláškou
 
 ### 4. Settings (Nastavení)
 - **Uživatelský profil:**
@@ -164,6 +177,7 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
     - Cílová pozice (lat, lon)
     - Datum vytvoření
     - **Toleranční poloměr** (max. odchylka od trasy v metrech) - pro detekci "stejné trasy"
+    - **`main_ride_id INTEGER NULL`** - nullable reference na `Rides.id`, která určuje hlavní jízdu, referenční geometrii a implicitní hranice trasy
     
   - Tabulka `Rides` (jízdy):
     - ID jízdy, ID trasy
@@ -172,6 +186,7 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
     - Čas startu, čas konce
     - Vzdálenost, průměrná rychlost
     - Nick uživatele
+    - `route_id = NULL` pro nezařazenou jízdu; přiřazení k trase proběhne až po validaci GPX hranic
     
   - Tabulka `Settings` (uživatelská nastavení):
     - Nick uživatele
@@ -182,11 +197,10 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
     - Ostatní preference
 
 ### Detekce trasy
-- Aplikace by měla tolerovat **drobné objizďky a odchylky** od trasy
-- Jízda se počítá za stejnou trasu, pokud:
-  - Startuje v **blízkosti startovní pozice** (podle tolerančního poloměru)
-  - Končí v **blízkosti cílové pozice** (podle tolerančního poloměru)
-  - GPS body jsou do určité **vzdálenosti od ideální trasy** (koridor okolo trasy)
+- Jízda může být přiřazena k trase pouze tehdy, pokud její GPX obsahuje bod v tolerančním kruhu explicitního startu, pokud je definován, a explicitního cíle, pokud je definován.
+- Pokud start nebo cíl není explicitně definován, použije se první nebo poslední GPX bod hlavní jízdy jako implicitní hranice.
+- Pokud hlavní jízda neexistuje, první úspěšně validovaná jízda trasu inicializuje a stane se hlavní.
+- Kontrola probíhá před přiřazením při zastavení záznamu, importu, přeřazení i změně hlavní jízdy; při neúspěchu zůstane `route_id = NULL`.
 
 ### Offline funkčnost
 - Všechna data (GPX + SQLite) uložena lokálně na zařízení
@@ -263,8 +277,10 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - [x] Seznam jízd na trase (včetně nezařazených)
 - [x] Smažení jízd
 - [x] Přeřazení jízdy mezi trasami / do nezařazených
-- [x] Hromadný import GPX jízd z `gpx_import/` (nezařazené jízdy, pro testování)
+- [x] Hromadný import GPX jízd přes systémový výběr souborů (nezařazené jízdy, pro testování)
 - [x] Nastavení startu/cíle trasy na mapě
+- [ ] **Hlavní jízda trasy** - nullable `Routes.main_ride_id`, inicializace první úspěšnou jízdou, volba v kontextovém menu a deterministická náhrada
+- [ ] Validace přiřazení jízd podle explicitních nebo implicitních hranic trasy
 - [ ] **Aktivní trasa** - výběr a perzistence (`Settings.active_route_id`), zvýraznění v seznamu tras
 - [ ] Live Map: vykreslení nejlepší jízdy aktivní trasy (modrá stopa) a start/cíl markerů
 - [ ] Ride Statistics screen: statická tabulka jízd aktivní trasy (čas, vzdálenost, průměrná rychlost, ztráta na nejlepší čas)

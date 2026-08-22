@@ -157,7 +157,13 @@ class RideService {
 
     // Ulož do databáze
     try {
-      final routeId = _selectedRouteId;
+      var routeId = _selectedRouteId;
+      if (routeId != null &&
+          !await validatePositionsForRoute(routeId, _currentRide!.positions)) {
+        routeId = null;
+        _lastError = 'Ride does not pass the active route start or end point';
+        if (kDebugMode) debugPrint('Ride: Route validation failed; saving unassigned');
+      }
       if (kDebugMode) {
         debugPrint('Ride: Saving with route_id=$routeId');
       }
@@ -175,6 +181,10 @@ class RideService {
         'gpx_file_path': gpxFilename, // Now just the filename
         'start_time': _currentRide!.startTime.toIso8601String(),
         'end_time': _currentRide!.endTime!.toIso8601String(),
+        'saved_at': _currentRide!.startTime.toIso8601String(),
+        'duration_seconds': _currentRide!.endTime!
+          .difference(_currentRide!.startTime)
+          .inSeconds,
         'distance_meters': _currentRide!.totalDistance,
         'avg_speed_kmh': _currentRide!.avgSpeed * 3.6, // Konvertuj na km/h
         'user_nick': _currentRide!.userId ?? 'Unknown',
@@ -230,11 +240,87 @@ class RideService {
   }
 
   /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.
+  Future<bool> validateRideForRoute(
+    int routeId,
+    Map<String, dynamic> ride,
+  ) async {
+    final fileName = ride['gpx_file_path'] as String?;
+    if (fileName == null || fileName.isEmpty) return false;
+    final positions = await GpxService.instance.loadRide(fileName);
+    return validatePositionsForRoute(routeId, positions);
+  }
+
+  Future<bool> validatePositionsForRoute(
+    int routeId,
+    List<GPSPosition> positions,
+  ) async {
+    if (positions.isEmpty) return false;
+    final route = await DatabaseService.instance.getRoute(routeId);
+    if (route == null) return false;
+    final tolerance = ((route['tolerance_radius'] as num?)?.toDouble() ?? 50) / 2;
+
+    var start = _routePoint(route, 'start_lat', 'start_lon');
+    var end = _routePoint(route, 'end_lat', 'end_lon');
+    final mainRideId = await DatabaseService.instance.getMainRideId(routeId);
+    if ((start == null || end == null) && mainRideId != null) {
+      final mainRide = await DatabaseService.instance.getRide(mainRideId);
+      final fileName = mainRide?['gpx_file_path'] as String?;
+      if (fileName != null && fileName.isNotEmpty) {
+        final mainPositions = await GpxService.instance.loadRide(fileName);
+        if (mainPositions.isNotEmpty) {
+          start ??= mainPositions.first;
+          end ??= mainPositions.last;
+        }
+      }
+    }
+
+    return (start == null || _containsPosition(positions, start, tolerance)) &&
+        (end == null || _containsPosition(positions, end, tolerance));
+  }
+
+  GPSPosition? _routePoint(
+    Map<String, dynamic> route,
+    String latitudeKey,
+    String longitudeKey,
+  ) {
+    final latitude = (route[latitudeKey] as num?)?.toDouble();
+    final longitude = (route[longitudeKey] as num?)?.toDouble();
+    if (latitude == null || longitude == null) return null;
+    return GPSPosition(
+      latitude: latitude,
+      longitude: longitude,
+      altitude: 0,
+      accuracy: 0,
+      speed: 0,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
+  bool _containsPosition(
+    List<GPSPosition> positions,
+    GPSPosition target,
+    double radiusMeters,
+  ) {
+    return positions.any((position) => GPSService.calculateDistance(
+          position.latitude,
+          position.longitude,
+          target.latitude,
+          target.longitude,
+        ) <= radiusMeters);
+  }
+
+  /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.
   Future<ImportResult> importGpxFiles() async {
     final fileNames = await GpxService.instance.listImportableFiles();
     var importedCount = 0;
     final failed = <String, String>{};
-    if (fileNames.isEmpty) return ImportResult(imported: 0, failed: failed);
+    if (fileNames.isEmpty) {
+      return ImportResult(
+        imported: 0,
+        failed: failed,
+        directoryPath: await GpxService.instance.getImportDirectoryPath(),
+      );
+    }
 
     final settings = await DatabaseService.instance.getSettings();
     final userNick = settings?['user_nick'] as String? ?? 'Import';
@@ -242,8 +328,11 @@ class RideService {
     for (final fileName in fileNames) {
       try {
         final positions = await GpxService.instance.loadImportFile(fileName);
+        if (kDebugMode) {
+          debugPrint('GPX import: $fileName -> ${positions.length} points');
+        }
         if (positions.isEmpty) {
-          failed[fileName] = 'GPX neobsahuje žádné GPS body';
+          failed[fileName] = 'The GPX file contains no GPS points';
           continue;
         }
 
@@ -272,6 +361,8 @@ class RideService {
           'gpx_file_path': finalFileName,
           'start_time': startTime.toIso8601String(),
           'end_time': endTime.toIso8601String(),
+          'saved_at': startTime.toIso8601String(),
+          'duration_seconds': durationSeconds,
           'distance_meters': distanceMeters,
           'avg_speed_kmh': avgSpeedKmh,
           'user_nick': userNick,
@@ -281,16 +372,94 @@ class RideService {
         importedCount++;
       } catch (e) {
         failed[fileName] = e.toString();
+        if (kDebugMode) {
+          debugPrint('GPX import failed: $fileName -> $e');
+        }
       }
     }
 
-    return ImportResult(imported: importedCount, failed: failed);
+    return ImportResult(
+      imported: importedCount,
+      failed: failed,
+      directoryPath: await GpxService.instance.getImportDirectoryPath(),
+    );
   }
+
+  Future<ImportResult> importGpxBytes(List<ImportedGpxFile> files) async {
+    var importedCount = 0;
+    final failed = <String, String>{};
+    final settings = await DatabaseService.instance.getSettings();
+    final userNick = settings?['user_nick'] as String? ?? 'Import';
+
+    for (final file in files) {
+      try {
+        final fileName = await GpxService.instance.saveImportedBytes(
+          file.name,
+          file.bytes,
+        );
+        final positions = await GpxService.instance.loadRide(fileName);
+        if (positions.isEmpty) {
+          failed[file.name] = 'The GPX file contains no GPS points';
+          await GpxService.instance.deleteRideFile(fileName);
+          continue;
+        }
+
+        double distanceMeters = 0;
+        for (var i = 1; i < positions.length; i++) {
+          distanceMeters += GPSService.calculateDistance(
+            positions[i - 1].latitude,
+            positions[i - 1].longitude,
+            positions[i].latitude,
+            positions[i].longitude,
+          );
+        }
+        final startTime = positions.first.timestamp;
+        final endTime = positions.last.timestamp;
+        final durationSeconds = endTime.difference(startTime).inSeconds;
+        final avgSpeedKmh = durationSeconds > 0
+            ? (distanceMeters / 1000) / (durationSeconds / 3600)
+            : 0.0;
+
+        await DatabaseService.instance.insertRide({
+          'route_id': null,
+          'gpx_file_path': fileName,
+          'start_time': startTime.toIso8601String(),
+          'end_time': endTime.toIso8601String(),
+          'saved_at': startTime.toIso8601String(),
+          'duration_seconds': durationSeconds,
+          'distance_meters': distanceMeters,
+          'avg_speed_kmh': avgSpeedKmh,
+          'user_nick': userNick,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+        importedCount++;
+      } catch (e) {
+        failed[file.name] = e.toString();
+      }
+    }
+    return ImportResult(
+      imported: importedCount,
+      failed: failed,
+      directoryPath: await GpxService.instance.getImportDirectoryPath(),
+    );
+  }
+}
+
+class ImportedGpxFile {
+  final String name;
+  final Uint8List bytes;
+
+  ImportedGpxFile({required this.name, required this.bytes});
 }
 
 class ImportResult {
   final int imported;
   final Map<String, String> failed;
+  final String directoryPath;
 
-  ImportResult({required this.imported, required this.failed});
+  ImportResult({
+    required this.imported,
+    required this.failed,
+    required this.directoryPath,
+  });
 }

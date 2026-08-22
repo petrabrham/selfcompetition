@@ -1,9 +1,11 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:latlong2/latlong.dart';
 import '../services/database_service.dart';
 import '../services/gps_service.dart';
 import '../services/gpx_service.dart';
 import '../services/ride_service.dart';
+import 'live_map_screen.dart';
 import 'map_position_picker_screen.dart';
 
 class RouteManagementScreen extends StatefulWidget {
@@ -13,12 +15,12 @@ class RouteManagementScreen extends StatefulWidget {
 class _RouteManagementScreenState extends State<RouteManagementScreen> {
   @override Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Trasy'),
+      title: const Text('Routes'),
       actions: [
         IconButton(
           onPressed: () => _importGpxFiles(context),
           icon: const Icon(Icons.file_download_outlined),
-          tooltip: 'Import GPX (gpx_import/)',
+          tooltip: 'Import GPX files',
         ),
       ],
     ),
@@ -30,7 +32,7 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
       ]),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-        if (snapshot.hasError) return Center(child: Text('Chyba: ${snapshot.error}'));
+        if (snapshot.hasError) return Center(child: Text('Error: ${snapshot.error}'));
         final data = snapshot.data!;
         final routes = data[0] as List<Map<String, dynamic>>;
         final unassignedRides = data[1] as List<Map<String, dynamic>>;
@@ -40,7 +42,7 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
           children: [
             if (unassignedRides.isNotEmpty)
               _RideGroupListItem(
-                title: 'Nezařazené jízdy',
+                title: 'Unassigned rides',
                 rideCount: unassignedRides.length,
                 onTap: () => _push(
                   context,
@@ -50,7 +52,7 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
             if (routes.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
-                child: Center(child: Text('Žádné trasy')),
+                child: Center(child: Text('No routes')),
               )
             else
               ...routes.map((route) {
@@ -77,12 +79,41 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
   }
 
   Future<void> _importGpxFiles(BuildContext context) async {
-    final result = await RideService.instance.importGpxFiles();
+    FilePickerResult? selection;
+    try {
+      selection = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.any,
+        withData: true,
+      );
+    } on Exception catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('File selection is unavailable: $error')),
+      );
+      return;
+    }
+    if (selection == null || selection.files.isEmpty || !context.mounted) return;
+
+    final files = selection.files
+        .where((file) => file.name.toLowerCase().endsWith('.gpx'))
+        .where((file) => file.bytes != null)
+        .map((file) => ImportedGpxFile(name: file.name, bytes: file.bytes!))
+        .toList();
+    if (files.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select at least one .gpx file.')),
+      );
+      return;
+    }
+    final result = await RideService.instance.importGpxBytes(files);
     if (!context.mounted) return;
 
-    final message = result.failed.isEmpty
-        ? 'Importováno ${result.imported} jízd.'
-        : 'Importováno ${result.imported} jízd. Selhalo: ${result.failed.length} (${result.failed.keys.join(', ')})';
+    final message = result.failed.isEmpty && result.imported == 0
+      ? 'Imported ${result.imported} rides.'
+      : result.failed.isEmpty
+        ? 'Imported ${result.imported} rides.'
+        : 'Imported ${result.imported} rides. Failed: ${result.failed.length} (${result.failed.keys.join(', ')})';
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
     setState(() {});
@@ -105,7 +136,7 @@ class _RideGroupListItem extends StatelessWidget {
     child: ListTile(
       leading: const Icon(Icons.route),
       title: Text(title),
-      subtitle: Text('$rideCount jízd'),
+      subtitle: Text('$rideCount rides'),
       trailing: const Icon(Icons.chevron_right),
       onTap: onTap,
     ),
@@ -121,8 +152,8 @@ class _RouteListItem extends StatelessWidget {
       color: isActive ? Theme.of(context).colorScheme.primaryContainer : null,
       child: ListTile(
         leading: Checkbox(value: isActive, onChanged: (_) => onToggleActive()),
-        title: Text(route['name'] as String? ?? 'Bez názvu'), subtitle: Text('${snapshot.data?.length ?? 0} jízd'), onTap: onTap,
-        trailing: PopupMenuButton<String>(onSelected: (_) => onEdit(), itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Upravit'))]),
+        title: Text(route['name'] as String? ?? 'Unnamed route'), subtitle: Text('${snapshot.data?.length ?? 0} rides'), onTap: onTap,
+        trailing: PopupMenuButton<String>(onSelected: (_) => onEdit(), itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Edit'))]),
       ),
     ),
   );
@@ -139,6 +170,7 @@ class RouteDetailScreen extends StatefulWidget {
 
 class _RouteDetailScreenState extends State<RouteDetailScreen> {
   late Future<List<Map<String, dynamic>>> _ridesFuture;
+  late Future<int?> _mainRideFuture;
 
   @override
   void initState() {
@@ -150,6 +182,9 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
     _ridesFuture = widget.routeId == null
         ? DatabaseService.instance.getRidesWithoutRoute()
         : DatabaseService.instance.getRidesByRoute(widget.routeId!);
+    _mainRideFuture = widget.routeId == null
+      ? Future.value(null)
+      : DatabaseService.instance.getMainRideId(widget.routeId!);
   }
 
   void _reloadRides() {
@@ -157,15 +192,41 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
     setState(_refreshRides);
   }
 
+  Future<void> _setMainRide(Map<String, dynamic> ride) async {
+    if (widget.routeId == null) return;
+    try {
+      await DatabaseService.instance.setMainRideForRoute(
+        widget.routeId!,
+        ride['id'] as int,
+      );
+      _reloadRides();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not set main ride: $error')),
+      );
+    }
+  }
+
+  void _showRideOnMap(Map<String, dynamic> ride) {
+    final fileName = ride['gpx_file_path'] as String?;
+    if (fileName == null || fileName.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LiveMapScreen(selectedRideFileName: fileName),
+      ),
+    );
+  }
+
   Future<void> _deleteRide(Map<String, dynamic> ride) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Smazat jízdu?'),
-        content: const Text('Jízda a její GPX soubor budou odstraněny.'),
+        title: const Text('Delete ride?'),
+        content: const Text('The ride and its GPX file will be deleted.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Zrušit')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Smazat')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
         ],
       ),
     );
@@ -187,7 +248,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
     final targetRouteId = await showDialog<int?>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Přesunout jízdu'),
+        title: const Text('Move ride'),
         content: SizedBox(
           width: double.maxFinite,
           child: ListView(
@@ -195,7 +256,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.help_outline),
-                title: const Text('Nezařazené'),
+                title: const Text('Unassigned'),
                 onTap: () {
                   selectionMade = true;
                   Navigator.pop(context, null);
@@ -203,7 +264,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
               ),
               ...routes.map((route) => ListTile(
                     leading: const Icon(Icons.route),
-                    title: Text(route['name'] as String? ?? 'Bez názvu'),
+                    title: Text(route['name'] as String? ?? 'Unnamed route'),
                     onTap: () {
                       selectionMade = true;
                       Navigator.pop(context, route['id'] as int);
@@ -217,6 +278,21 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
 
     final currentRouteId = widget.routeId;
     if (!mounted || !selectionMade || targetRouteId == currentRouteId) return;
+    if (targetRouteId != null) {
+      final valid = await RideService.instance.validateRideForRoute(
+        targetRouteId,
+        ride,
+      );
+      if (!valid) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Ride does not pass the target route start or end point.'),
+          ),
+        );
+        return;
+      }
+    }
     await DatabaseService.instance.updateRide(
       ride['id'] as int,
       {'route_id': targetRouteId},
@@ -225,27 +301,32 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
   }
 
   @override Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(widget.routeId == null ? 'Nezařazené jízdy' : 'Detail Trasy')),
-    body: FutureBuilder<List<Map<String,dynamic>>>(
-      future: _ridesFuture,
+    appBar: AppBar(title: Text(widget.routeId == null ? 'Unassigned rides' : 'Route details')),
+    body: FutureBuilder<List<Object?>>(
+      future: Future.wait<Object?>([_ridesFuture, _mainRideFuture]),
       builder: (context, rideSnapshot) {
         if (rideSnapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-        final rides = rideSnapshot.data ?? <Map<String,dynamic>>[];
+        final data = rideSnapshot.data ?? <Object?>[];
+        final rides = data.isEmpty ? <Map<String, dynamic>>[] : data[0] as List<Map<String, dynamic>>;
+        final mainRideId = data.length > 1 ? data[1] as int? : null;
         final sortedRides = rides.toList()
           ..sort((a, b) => _rideStartTime(b).compareTo(_rideStartTime(a)));
         return ListView(padding: const EdgeInsets.all(16), children: [
           Text(
-            widget.routeId == null ? 'Nezařazené jízdy' : 'Jízdy na trase',
+            widget.routeId == null ? 'Unassigned rides' : 'Route rides',
             style: Theme.of(context).textTheme.headlineSmall,
           ),
-          const SizedBox(height: 20), Text('Jízdy (${rides.length})'),
+          const SizedBox(height: 20), Text('Rides (${rides.length})'),
           if (rides.isEmpty)
-            const Text('Žádné jízdy')
+            const Text('No rides')
           else
             ...sortedRides.map((ride) => _RideListItem(
                   ride: ride,
                   onDelete: () => _deleteRide(ride),
                   onMove: () => _moveRide(ride),
+                    onShowOnMap: () => _showRideOnMap(ride),
+                    isMainRide: ride['id'] == mainRideId,
+                    onSetMain: widget.routeId == null ? null : () => _setMainRide(ride),
                 )),
         ]);
       },
@@ -262,11 +343,17 @@ class _RideListItem extends StatelessWidget {
   final Map<String, dynamic> ride;
   final VoidCallback onDelete;
   final VoidCallback onMove;
+  final VoidCallback onShowOnMap;
+  final bool isMainRide;
+  final VoidCallback? onSetMain;
 
   const _RideListItem({
     required this.ride,
     required this.onDelete,
     required this.onMove,
+    required this.onShowOnMap,
+    required this.isMainRide,
+    this.onSetMain,
   });
 
   @override
@@ -278,30 +365,58 @@ class _RideListItem extends StatelessWidget {
 
     return ListTile(
       leading: const Icon(Icons.directions_bike),
-      title: Text(ride['user_nick'] as String? ?? 'Bez přezdívky'),
+      title: Row(
+        children: [
+          Expanded(child: Text(ride['user_nick'] as String? ?? 'No nickname')),
+          if (isMainRide)
+            const Chip(
+              label: Text('Main'),
+              visualDensity: VisualDensity.compact,
+            ),
+        ],
+      ),
       subtitle: Text(
         '${_formatDateTime(startTime)}  |  ${distanceKm.toStringAsFixed(1)} km  |  ${_formatDuration(duration)}',
       ),
       trailing: PopupMenuButton<String>(
         onSelected: (value) {
+          if (value == 'map') onShowOnMap();
           if (value == 'move') onMove();
           if (value == 'delete') onDelete();
+          if (value == 'main') onSetMain?.call();
         },
-        itemBuilder: (_) => const [
-          PopupMenuItem(
+        itemBuilder: (_) => [
+          if (onSetMain != null)
+            const PopupMenuItem(
+              value: 'main',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.star_outline),
+                title: Text('Set as main ride for route'),
+              ),
+            ),
+          const PopupMenuItem(
+            value: 'map',
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.map_outlined),
+              title: Text('Show on map'),
+            ),
+          ),
+          const PopupMenuItem(
             value: 'move',
             child: ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(Icons.drive_file_move_outlined),
-              title: Text('Přesunout do trasy'),
+              title: Text('Move to route'),
             ),
           ),
-          PopupMenuItem(
+          const PopupMenuItem(
             value: 'delete',
             child: ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(Icons.delete_outline),
-              title: Text('Smazat jízdu'),
+              title: Text('Delete ride'),
             ),
           ),
         ],
@@ -338,8 +453,8 @@ class _RouteFormScreenState extends State<RouteFormScreen> {
   String v(dynamic x) => x?.toString() ?? '';
   @override void dispose() { name.dispose(); description.dispose(); startLat.dispose(); startLon.dispose(); endLat.dispose(); endLon.dispose(); tolerance.dispose(); super.dispose(); }
   double? n(String x) => x.trim().isEmpty ? null : double.tryParse(x.trim());
-  Future<void> save() async { if (!key.currentState!.validate()) return; setState(() => saving = true); final now = DateTime.now().toIso8601String(); final r = <String,dynamic>{'name': name.text.trim(), 'description': description.text.trim().isEmpty ? null : description.text.trim(), 'start_lat': n(startLat.text), 'start_lon': n(startLon.text), 'end_lat': n(endLat.text), 'end_lon': n(endLon.text), 'tolerance_radius': n(tolerance.text) ?? 50.0, 'updated_at': now}; try { if (widget.routeId == null) { r['created_at'] = now; await DatabaseService.instance.insertRoute(r); } else { await DatabaseService.instance.updateRoute(widget.routeId!, r); } if (mounted) Navigator.pop(context); } catch (e) { if (mounted) { setState(() => saving = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Chyba: $e'))); } } }
-  Widget field(TextEditingController c, String label) => TextFormField(controller: c, decoration: InputDecoration(labelText: label), keyboardType: const TextInputType.numberWithOptions(decimal: true), validator: (x) => x != null && x.trim().isNotEmpty && n(x) == null ? 'Zadejte číslo' : null);
+  Future<void> save() async { if (!key.currentState!.validate()) return; setState(() => saving = true); final now = DateTime.now().toIso8601String(); final r = <String,dynamic>{'name': name.text.trim(), 'description': description.text.trim().isEmpty ? null : description.text.trim(), 'start_lat': n(startLat.text), 'start_lon': n(startLon.text), 'end_lat': n(endLat.text), 'end_lon': n(endLon.text), 'tolerance_radius': n(tolerance.text) ?? 50.0, 'updated_at': now}; try { if (widget.routeId == null) { r['created_at'] = now; await DatabaseService.instance.insertRoute(r); } else { await DatabaseService.instance.updateRoute(widget.routeId!, r); } if (mounted) Navigator.pop(context); } catch (e) { if (mounted) { setState(() => saving = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'))); } } }
+  Widget field(TextEditingController c, String label) => TextFormField(controller: c, decoration: InputDecoration(labelText: label), keyboardType: const TextInputType.numberWithOptions(decimal: true), validator: (x) => x != null && x.trim().isNotEmpty && n(x) == null ? 'Enter a number' : null);
 
   Future<void> pickFromMap(TextEditingController latController, TextEditingController lonController, String title, {required bool useLastGpxPosition}) async {
     final currentLat = double.tryParse(latController.text.trim());
@@ -412,11 +527,11 @@ class _RouteFormScreenState extends State<RouteFormScreen> {
         child: TextButton.icon(
           onPressed: () => pickFromMap(latController, lonController, pickerTitle, useLastGpxPosition: useLastGpxPosition),
           icon: const Icon(Icons.map_outlined),
-          label: const Text('Zadat z mapy'),
+          label: const Text('Select on map'),
         ),
       ),
     ],
   );
 
-  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.routeId == null ? 'Nová Trasa' : 'Upravit Trasu')), body: loading ? const Center(child: CircularProgressIndicator()) : Form(key: key, child: ListView(padding: const EdgeInsets.all(16), children: [TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Název *'), validator: (x) => x == null || x.trim().isEmpty ? 'Název trasy je povinný' : null), TextFormField(controller: description, decoration: const InputDecoration(labelText: 'Popis'), maxLines: 3), positionFields(startLat, startLon, 'Start', 'Vyberte start na mapě', useLastGpxPosition: false), const SizedBox(height: 12), positionFields(endLat, endLon, 'End', 'Vyberte cíl na mapě', useLastGpxPosition: true), field(tolerance, 'Toleranční radius'), const SizedBox(height: 20), ElevatedButton(onPressed: saving ? null : save, child: Text(saving ? 'Ukládám...' : 'Uložit'))])));
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: Text(widget.routeId == null ? 'New Route' : 'Edit Route')), body: loading ? const Center(child: CircularProgressIndicator()) : Form(key: key, child: ListView(padding: const EdgeInsets.all(16), children: [TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Name *'), validator: (x) => x == null || x.trim().isEmpty ? 'Route name is required' : null), TextFormField(controller: description, decoration: const InputDecoration(labelText: 'Description'), maxLines: 3), positionFields(startLat, startLon, 'Start', 'Select start on map', useLastGpxPosition: false), const SizedBox(height: 12), positionFields(endLat, endLon, 'End', 'Select end on map', useLastGpxPosition: true), field(tolerance, 'Tolerance radius'), const SizedBox(height: 20), ElevatedButton(onPressed: saving ? null : save, child: Text(saving ? 'Saving...' : 'Save'))])));
 }

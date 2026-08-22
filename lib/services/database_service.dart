@@ -26,7 +26,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 4,
+      version: 6,
       onCreate: _createTables,
       onUpgrade: _upgradeDatabase,
     );
@@ -94,6 +94,41 @@ class DatabaseService {
         'ALTER TABLE Settings ADD COLUMN active_route_id INTEGER',
       );
     }
+    if (oldVersion < 5) {
+      await db.execute(
+        'ALTER TABLE Rides ADD COLUMN saved_at TEXT',
+      );
+      await db.execute(
+        'ALTER TABLE Rides ADD COLUMN duration_seconds INTEGER',
+      );
+      await db.execute(
+        'ALTER TABLE Rides ADD COLUMN updated_at TEXT',
+      );
+      await db.execute('''
+        UPDATE Rides
+        SET saved_at = COALESCE(saved_at, start_time),
+            duration_seconds = CASE
+              WHEN end_time IS NOT NULL AND start_time IS NOT NULL
+              THEN MAX(0, CAST((julianday(end_time) - julianday(start_time)) * 86400 AS INTEGER))
+              ELSE NULL
+            END,
+            updated_at = COALESCE(updated_at, created_at)
+      ''');
+    }
+    if (oldVersion < 6) {
+      await db.execute(
+        'ALTER TABLE Routes ADD COLUMN main_ride_id INTEGER',
+      );
+      await db.execute('''
+        UPDATE Routes
+        SET main_ride_id = (
+          SELECT Rides.id FROM Rides
+          WHERE Rides.route_id = Routes.id
+          ORDER BY Rides.start_time ASC, Rides.id ASC
+          LIMIT 1
+        )
+      ''');
+    }
   }
 
   /// Create all tables
@@ -110,6 +145,7 @@ class DatabaseService {
         end_lat REAL,
         end_lon REAL,
         tolerance_radius REAL DEFAULT 50.0,
+        main_ride_id INTEGER,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -124,10 +160,13 @@ class DatabaseService {
         gpx_file_path TEXT,
         start_time TEXT NOT NULL,
         end_time TEXT,
+        saved_at TEXT,
+        duration_seconds INTEGER,
         distance_meters REAL DEFAULT 0.0,
         avg_speed_kmh REAL DEFAULT 0.0,
         user_nick TEXT,
         created_at TEXT NOT NULL,
+        updated_at TEXT,
         FOREIGN KEY (route_id) REFERENCES Routes(id)
       )
     ''');
@@ -154,6 +193,7 @@ class DatabaseService {
       'min_distance_threshold_meters': 5.0,
       'num_rides_to_display': 3,
       'screen_off_timeout_seconds': 30,
+      'active_route_id': null,
       'updated_at': DateTime.now().toIso8601String(),
     });
   }
@@ -255,24 +295,85 @@ class DatabaseService {
   /// Insert new ride
   Future<int> insertRide(Map<String, dynamic> ride) async {
     final db = await database;
-    return await db.insert('Rides', ride);
+    final rideId = await db.insert('Rides', ride);
+    final routeId = ride['route_id'] as int?;
+    if (routeId != null && await getMainRideId(routeId) == null) {
+      await setMainRideId(routeId, rideId);
+    }
+    return rideId;
   }
 
   /// Update ride
   Future<int> updateRide(int id, Map<String, dynamic> ride) async {
     final db = await database;
-    return await db.update(
+    final previous = await getRide(id);
+    final result = await db.update(
       'Rides',
       ride,
       where: 'id = ?',
       whereArgs: [id],
     );
+    final previousRouteId = previous?['route_id'] as int?;
+    final newRouteId = ride.containsKey('route_id')
+        ? ride['route_id'] as int?
+        : previousRouteId;
+    if (previousRouteId != null && previousRouteId != newRouteId) {
+      await repairMainRide(previousRouteId);
+    }
+    if (newRouteId != null && await getMainRideId(newRouteId) == null) {
+      await setMainRideId(newRouteId, id);
+    }
+    return result;
   }
 
   /// Delete ride
   Future<int> deleteRide(int id) async {
     final db = await database;
-    return await db.delete('Rides', where: 'id = ?', whereArgs: [id]);
+    final ride = await getRide(id);
+    final result = await db.delete('Rides', where: 'id = ?', whereArgs: [id]);
+    final routeId = ride?['route_id'] as int?;
+    if (routeId != null) await repairMainRide(routeId);
+    return result;
+  }
+
+  Future<int?> getMainRideId(int routeId) async {
+    final route = await getRoute(routeId);
+    return route?['main_ride_id'] as int?;
+  }
+
+  Future<void> setMainRideId(int routeId, int? rideId) async {
+    final db = await database;
+    await db.update(
+      'Routes',
+      {'main_ride_id': rideId},
+      where: 'id = ?',
+      whereArgs: [routeId],
+    );
+  }
+
+  Future<void> setMainRideForRoute(int routeId, int rideId) async {
+    final ride = await getRide(rideId);
+    if (ride == null || ride['route_id'] != routeId) {
+      throw StateError('The selected ride does not belong to this route.');
+    }
+    await setMainRideId(routeId, rideId);
+  }
+
+  Future<void> repairMainRide(int routeId) async {
+    final currentId = await getMainRideId(routeId);
+    if (currentId != null) {
+      final current = await getRide(currentId);
+      if (current != null && current['route_id'] == routeId) return;
+    }
+    final db = await database;
+    final rides = await db.query(
+      'Rides',
+      where: 'route_id = ?',
+      whereArgs: [routeId],
+      orderBy: 'start_time ASC, id ASC',
+      limit: 1,
+    );
+    await setMainRideId(routeId, rides.isEmpty ? null : rides.first['id'] as int);
   }
 
   /// Get recent rides for a route (for comparison/ranking)

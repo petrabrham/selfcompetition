@@ -13,17 +13,23 @@ Vytvorit spolehlivou spravu tras a ulozenych jizd tak, aby bylo mozne:
 
 Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stabilni datovy a uzivatelsky zaklad pro Phase 3.
 
+## Jazyk uzivatelskeho rozhrani
+
+- Vsechny texty zobrazovane uzivateli budou v anglictine, vcetne nazvu obrazovek, tlacitek, popisku, dialogu, validacnich a chybovych hlaseni, tooltipu a prazdnych stavu.
+- Aktualni verze aplikace bude mit pouze anglicky jazyk.
+- Budouci dalsi jazyky se budou resit standardni Flutter lokalizaci; nyni se lokalizacni vrstva neimplementuje.
+
 ## Import GPX jizd
 
 1. Uzivatel muze do aplikace hromadne importovat existujici GPX soubory (napr. pro testovani nebo prevod historickych dat), bez nutnosti fyzicky jezdit s aplikaci.
-2. Soubory se pripravi do adresare `gpx_import/` (nahrani napr. pres `adb push` nebo Device Explorer).
-3. V Route Management je akce "Import GPX (gpx_import/)", ktera pro kazdy nalezeny `.gpx` soubor:
+2. V Route Management uzivatel spusti akci "Import GPX" a vybere jeden nebo vice `.gpx` souboru pres systemovy vyber souboru.
+3. Pro kazdy vybrany `.gpx` soubor aplikace:
    - naparsuje GPS body,
    - spocita `distance_meters` (soucet Haversine vzdalenosti mezi body), `start_time`/`end_time` (prvni/posledni bod) a `avg_speed_kmh`,
    - presune soubor do `gpx/` (kolize reseny stejne jako u zaznamu jizdy, pripona `_01`, `_02`, ...),
    - vlozi novy zaznam do `Rides` jako nezarazenou jizdu (`route_id = NULL`), s `user_nick` z aktualnich `Settings`.
-4. Soubory bez pouzitelnych GPS bodu se neimportuji a zustanou v `gpx_import/`; uzivatel je informovan souhrnnou hlaskou (pocet importovanych, pocet selhanych).
-5. Import nijak nemeni uz importovane/ulozene jizdy - je to jednorazova operace nad aktualnim obsahem `gpx_import/`.
+4. Soubory bez pouzitelnych GPS bodu se neimportuji; uzivatel je informovan souhrnnou hlaskou (pocet importovanych, pocet selhanych).
+5. Import nijak nemeni uz importovane/ulozene jizdy; vybrany soubor se zkopiruje do interniho `gpx/` adresare.
 6. Importovane jizdy lze nasledne stejne jako ostatni nezarazene jizdy presunout k trase, prejmenovat kontext nebo smazat.
 7. Import je urcen predevsim pro testovani a rychle naplneni databaze daty; nenahrazuje Phase 4 pozadavek na import/export sdilenych GPX souboru (napr. z jinych aplikaci) - ten muze na tomto zakladu stavet.
 
@@ -65,6 +71,19 @@ Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stab
 5. Trasa muze mit volitelny start, cil a tolerancni polomer. Tyto udaje budou vyuzity pozdeji pri zarovnani a porovnavani jizd.
 6. Uzivatelska trasa muze existovat pouze tehdy, pokud obsahuje alespon jednu jizdu.
 7. Trasa s posledni jizdou se nesmi smazat bez rozhodnuti, kam bude jizda presunuta.
+8. Trasa ma `main_ride_id INTEGER NULL`, nullable referenci na `Rides.id`, ktera urcuje hlavni jizdu definujici jeji referencni geometrii.
+9. Pri vytvoreni trasy je `main_ride_id = NULL`; prvni uspesne prirazena jizda se stane hlavni.
+10. Uzivatel muze hlavni jizdu zmenit kontextovou akci "Set as main ride for route".
+11. Hlavni jizda je oddelena od nejrychlejsi jizdy: nejrychlejsi jizda je vybrana nejmensim `duration_seconds` pro modrou referencni caru, zatimco hlavni jizda urcuje referencni geometrii a implicitni hranice trasy.
+
+### Kontrola pred prirazenim jizdy
+
+1. Pokud je definovan start, GPX jizdy musi obsahovat bod v tolerancnim kruhu startu.
+2. Pokud je definovan cil, GPX jizdy musi obsahovat bod v tolerancnim kruhu cile.
+3. Pokud start nebo cil nejsou explicitne definovany, pouzije se pro dane hranice prvni, respektive posledni GPX bod hlavni jizdy jako implicitni reference.
+4. Pri `main_ride_id = NULL` neexistuje implicitni hranice; prvni uspesne prirazena jizda muze trasu inicializovat a stane se hlavni.
+5. Kontrola probiha pred prirazenim pri ukonceni zaznamu, importu, prerazeni jizdy i pri zmene hlavni jizdy.
+6. Pokud kontrola selze, jizda se nepriradi a zustane nezarazena (`route_id = NULL`); pri neuspesne zmene hlavni jizdy se puvodni hlavni jizda nemeni.
 
 ### Nezarazene jizdy
 
@@ -86,6 +105,7 @@ Overit a pripadne rozsirit tabulku `Routes`:
 - `start_lat`, `start_lon` - volitelne pro nove trasy
 - `end_lat`, `end_lon` - volitelne pro nove trasy
 - `tolerance_radius` - volitelne, vychozi hodnota
+- `main_ride_id INTEGER NULL` - nullable reference na `Rides.id`, ktera definuje referencni geometrii a implicitni hranice trasy
 - `created_at`
 - `updated_at`
 - pripadne `archived_at` nebo `is_deleted` pro bezpecne archivovani
@@ -108,6 +128,21 @@ Overit a upravit vazbu:
 - `updated_at` - cas posledni upravy (pro audit: trimovani, prerazeni trasy, atd.)
 
 Jizda muze byt ulozena bez vazby na trasu. Pri nevybrane nebo nezname trase se pouzije `route_id = NULL`; jizda se nesmi ztratit kvuli chybejicimu kontextu.
+
+`main_ride_id` je jedina autoritativni vazba pro urceni hlavni jizdy trasy. Nejlepsi jizda podle `duration_seconds` muze byt jina nez hlavni jizda. Hlavni jizda slouzi pro referencni geometrii a implicitni prvni/posledni bod trasy.
+
+Pri smazani nebo prerazeni hlavni jizdy mimo trasu se automaticky vybere jina existujici jizda dane trasy; pokud zadna nezbyva, `main_ride_id` se nastavi na `NULL`.
+Nahradni jizda se vybere deterministicky podle nejdrivejsiho `start_time`, pri shode podle nejnizsiho `id`.
+
+### Strategie ulozeni vypoctu
+
+- Originalni GPX soubor zustava nemenny a je zdrojem pravdy pro GPS body a jejich casy.
+- Do SQLite se ukladaji odvozene hodnoty (`start_time`, `duration_seconds`, `distance_meters`, `avg_speed_kmh`), aby byly rychle dostupne pro seznamy, statistiky a vyber nejlepsi jizdy.
+- Pri ukonceni zaznamu, importu, prerazeni jizdy nebo zmene start/cil pozice se odvozene hodnoty znovu vypoctou z originalniho GPX pred ulozenim zmeny do SQLite.
+- Cistena GPX kopie se zatim nevytvari. Zabranuje se tim problemum se synchronizaci mezi originalem a kopii a setri se uloziste.
+- Pro budouci realtime porovnavani se budou pozice predchozich jizd dopoctavat z originalnich GPS bodu a jejich timestampu. V aktualnim case se najde odpovidajici bod nebo interpolovana pozice podle casu od trimovaneho startu.
+- Stejny mechanismus umozni zobrazit, jakou vzdalenost cyklista ujel v predchozich jizdach v okamziku, kdy je na aktualni jizde. Upravene start/cil body a detekovane pauzy se zohledni pred vypoctem casove osy jizdy.
+- Pokud by cteni a vypocty z originalnich GPX byly pri realtime provozu prokazatelne prilis pomale, lze pozdeji pridat odvozeny cache soubor. Originalni GPX ale musi zustat zachovany jako zdroj pravdy.
 
 **Trimovani jizd (dulezite pro fazi 3):**
 
@@ -182,11 +217,13 @@ Tyto konstanty uzivateli umozni:
 ### Migrace existujicich dat
 
 1. Vytvorit novou verzi tabulky `Rides` s nullable `route_id`, protoze SQLite bezne neumoznuje odstranit `NOT NULL` z existujiciho sloupce primym `ALTER TABLE`.
-2. Prekopirovat existujici jizdy do nove tabulky a zachovat jejich ID, metadata a GPX cesty.
-3. Existujici jizdy s `route_id = 0` prevest na `route_id = NULL`, pokud jde o dosavadni nezarazene jizdy.
-4. Zachovat existujici GPX soubory a cesty.
-5. Doplnit databazovou verzi a migracni test.
-6. Overit, ze migrace je opakovatelna a nesmaze zadnou jizdu.
+2. Rozsirit tabulku `Routes` o `main_ride_id INTEGER NULL` jako nullable referenci na `Rides.id` a zachovat `NULL` pro nove nebo dosud neinicializovane trasy.
+3. Prekopirovat existujici jizdy do nove tabulky a zachovat jejich ID, metadata a GPX cesty.
+4. Existujici jizdy s `route_id = 0` prevest na `route_id = NULL`, pokud jde o dosavadni nezarazene jizdy.
+5. Pro existujici trasy s jizdami doplnit hlavni jizdu deterministicky podle nejdrivejsiho `start_time`, pri shode podle nejnizsiho `id`; pro trasy bez jizd ponechat `NULL`.
+6. Zachovat existujici GPX soubory a cesty.
+7. Doplnit databazovou verzi a migracni test vcetne foreign-key vazby a deterministickeho vyberu.
+8. Overit, ze migrace je opakovatelna a nesmaze zadnou jizdu.
 
 ## Uzivatelske workflow
 
@@ -252,15 +289,18 @@ U kazde jizdy musi byt mozne:
 
 1. Uzivatel zvoli jizdu a akci "Priradit k trase".
 2. Vybere existujici trasu, nebo vytvori novou.
-3. Aplikace zkontroluje, ze cilova trasa ma jmeno.
-4. Aktualizuje se pouze `route_id` a případně `updated_at` v SQLite; **GPX soubor v adresáři `gpx/` se nepřesouvá** - stejný soubor zůstává na místě
-5. **Prepocita se trimovani podle start/end pozic nove trasy:**
+3. Aplikace zkontroluje, ze cilova trasa ma jmeno a pred prirazenim provede kontrolu GPX proti explicitnim hranicim nebo implicitnim hranicim hlavni jizdy cilove trasy v tolerancnim kruhu.
+4. Pri neuspechu se cilova trasa nenastavi a jizda zustane nezarazena (`route_id = NULL`).
+5. Aktualizuje se pouze `route_id` a pripadne `updated_at` v SQLite; **GPX soubor v adresari `gpx/` se nepresouva** - stejny soubor zustava na miste.
+6. Pokud cilova trasa nema hlavni jizdu, prvni uspesne prirazena jizda se nastavi jako `main_ride_id`.
+7. **Prepocita se trimovani podle start/end pozic nove trasy:**
    - Pokud je nova trasa ma nastavene start a end pozice, aplikace parsuje GPX
-   - Najde prvni bod po start pozici a posledni bod pred end pozici
+   - Najde prvni bod pro start pozici a posledni bod pred end pozici
    - Prepocita: `start_time`, `duration_seconds`, `distance_meters`
    - Aktualizuje se `updated_at`
-6. Pokud puvodni uzivatelska trasa po presunu nema zadnou jizdu, nabidne se jeji archivace nebo smazani.
-7. Jizda nikdy nesmi zmizet kvuli tomu, ze se stala nezaazenou.
+8. Pokud je presouvana jizda hlavni jizdou puvodni trasy, vybere se nahradni jizda podle nejdrivejsiho `start_time`, pak nejnizsiho `id`; pokud zadna nezbyva, nastavi se `main_ride_id = NULL`.
+9. Pokud puvodni uzivatelska trasa po presunu nema zadnou jizdu, nabidne se jeji archivace nebo smazani.
+10. Jizda nikdy nesmi zmizet kvuli tomu, ze se stala neza razenou.
 
 ## UI obrazovky
 
@@ -275,6 +315,13 @@ Implementovat postupne:
 5. detail jizdy,
 6. akce pro presun, export a smazani jizdy,
 7. potvrzovaci dialogy pro mazani.
+
+### Hlavni jizda
+
+- Detail trasy oznaci aktualni hlavni jizdu a umozni u kazde jizdy kontextovou akci "Set as main ride for route".
+- Zmena hlavni jizdy se nejprve validuje proti explicitnimu startu/cili nebo implicitnim hranicim nove hlavni jizdy; pri neuspechu se hlavni jizda nezmeni.
+- Pokud je hlavni jizda smazana nebo presunuta mimo trasu, aplikace vybere nahradu podle nejdrivejsiho `start_time`, pak nejnizsiho `id`; pokud zadna jizda nezbyva, ulozi `main_ride_id = NULL`.
+- Hlavni jizda neurcuje modrou caru nejrychlejsi jizdy; modra cara se stale vybera podle nejnizsiho `duration_seconds`.
 
 ### Live Map napojeni
 
@@ -318,12 +365,14 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 8. Implementovat seznam tras vcetne zvyrazneni aktivni trasy.
 9. Implementovat detail trasy a seznam jizd.
 10. Implementovat vytvoreni a editaci trasy, vcetne nastaveni start a end pozic (s prepocitanim trimovani jizd).
-11. Implementovat presun, export a mazani jizd (s aktualizaci trimovani pri zmene trasy).
-12. Napojit Live Map na aktivni trasu: zobrazeni jmena, vykresleni nejlepsi jizdy (modra cara) a start/cil markeru; odstranit vyber trasy z Live Map.
-13. Implementovat Ride Statistics jako statickou tabulku jizd aktivni trasy (razeni podle casu, sloupce dle specifikace vyse).
-14. Implementovat import GPX jizd z adresare `gpx_import/` (bez zavislosti na dalsich krocich, lze i drive kvuli testovani).
-15. Doplnit migracni, servisni a widget testy.
-16. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
+11. Implementovat validaci prirazeni proti explicitnim nebo implicitnim hranicim a inicializaci `main_ride_id` prvni uspesnou jizdou.
+12. Implementovat presun, export a mazani jizd (s aktualizaci trimovani pri zmene trasy a deterministickou nahradou hlavni jizdy).
+13. Implementovat volbu hlavni jizdy v detailu trasy vcetne akce "Set as main ride for route" a validace pred zmenou.
+14. Napojit Live Map na aktivni trasu: zobrazeni jmena, vykresleni nejlepsi jizdy (modra cara) a start/cil markeru; odstranit vyber trasy z Live Map.
+15. Implementovat Ride Statistics jako statickou tabulku jizd aktivni trasy (razeni podle casu, sloupce dle specifikace vyse).
+16. Implementovat import GPX jizd pres systemovy vyber souboru (vcetne validace pred prirazenim; bez zavislosti na dalsich krocich, lze i drive kvuli testovani).
+17. Doplnit migracni, servisni a widget testy.
+18. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
 
 ## Akceptacni kriteria
 
@@ -334,6 +383,12 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 - Uzivatel vidi pocet jizd u trasy.
 - Uzivatel muze otevrit detail trasy a zobrazit jeji jizdy.
 - Uzivatel muze priradit jizdu k jine trase bez ztraty GPX souboru.
+- Kazde prirazeni pri ukonceni zaznamu, importu, prerazeni nebo zmene hlavni jizdy se predem overi proti explicitnim hranicim v tolerancnim kruhu, nebo proti implicitnim hranicim hlavni jizdy, pokud explicitni hranice nejsou zadane.
+- Pri neuspesne validaci zustane jizda nezarazena (`route_id = NULL`); pri neuspesne zmene hlavni jizdy se puvodni hlavni jizda zachova.
+- Nova trasa zacina s `main_ride_id = NULL` a prvni uspesne prirazena jizda se stane hlavni.
+- Uzivatel muze vybrat jinou hlavni jizdu akci "Set as main ride for route".
+- Hlavni jizda se pri smazani nebo presunu nahradi deterministicky podle `start_time`, pak `id`, nebo se nastavi na `NULL`, pokud nahrada neexistuje.
+- Hlavni jizda je odlisna od nejrychlejsi jizdy; modra referencni cara pouziva jizdu s nejnizsim `duration_seconds`, hlavni jizda urcuje geometrii a implicitni hranice.
 - Uzivatel muze smazat jizdu s potvrzenim.
 - Aktivni zaznam nelze omylem prepnout do jine trasy.
 - **Aktivni trasa:**
@@ -347,9 +402,9 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
   - Live Map vykresli modrou carou GPX jizdy s nejnizsim `duration_seconds` na aktivni trase, a start/cil markery, pokud jsou nastaveny.
   - Ride Statistics zobrazuje statickou tabulku jizd aktivni trasy serazenou podle casu, s casovou ztratou oproti nejlepsimu casu; bez aktivni trasy zobrazi vyzvu k vyberu trasy.
 - **Import GPX jizd:**
-  - GPX soubory v `gpx_import/` lze hromadne importovat jako nezarazene jizdy jednou akci v Route Management.
+  - Jeden nebo vice GPX souboru lze vybrat systemovym vyberem souboru a importovat jako nezarazene jizdy jednou akci v Route Management.
   - Importovane jizdy maji spocitane `distance_meters`, `start_time`, `end_time` a `avg_speed_kmh` z GPX bodu.
-  - Uspesne importovane soubory se presunou do `gpx/`; soubory bez pouzitelnych bodu zustanou v `gpx_import/` a uzivatel je informovan.
+  - Uspesne importovane soubory se zkopiruji do `gpx/`; soubory bez pouzitelnych bodu se neulozi a uzivatel je informovan.
   - Import nesmaze ani neprepise jiz existujici jizdy v databazi.
 - **Trimovani jizd:**
   - Pri ulozeni jizdy se automaticky naplni `saved_at` (prvni bod) a `start_time = saved_at`

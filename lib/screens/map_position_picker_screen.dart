@@ -20,7 +20,7 @@ class MapPositionPickerScreen extends StatefulWidget {
 }
 
 class _MapPositionPickerScreenState extends State<MapPositionPickerScreen> {
-  static const _fallbackPosition = LatLng(50.0755, 14.4378); // Praha
+  static const _fallbackPosition = LatLng(50.0755, 14.4378); // Default location
 
   late final MapController _mapController;
   late LatLng _center;
@@ -47,7 +47,7 @@ class _MapPositionPickerScreenState extends State<MapPositionPickerScreen> {
           IconButton(
             onPressed: () => Navigator.pop(context, _center),
             icon: const Icon(Icons.check),
-            tooltip: 'Potvrdit pozici',
+            tooltip: 'Confirm position',
           ),
         ],
       ),
