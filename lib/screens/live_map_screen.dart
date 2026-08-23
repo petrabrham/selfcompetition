@@ -690,6 +690,19 @@ class _LiveMapScreenState extends State<LiveMapScreen>
               ),
             ],
           ),
+        if (_isRecording &&
+            (RideService.instance.currentRide?.positions.length ?? 0) >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: RideService.instance.currentRide!.positions
+                    .map((position) => LatLng(position.latitude, position.longitude))
+                    .toList(),
+                color: Colors.red,
+                strokeWidth: 4,
+              ),
+            ],
+          ),
         if (_activeRoute != null) _buildRouteToleranceCircles(_activeRoute!),
         if (_currentPosition != null)
           MarkerLayer(
@@ -765,6 +778,28 @@ class _LiveMapScreenState extends State<LiveMapScreen>
                     ),
                     SizedBox(width: 10),
                     Text('Getting GPS position...'),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        if (_isRecording && _currentPosition != null)
+          Positioned(
+            top: 16,
+            left: 16,
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${((RideService.instance.currentRide?.totalDistance ?? 0) / 1000).toStringAsFixed(2)} km',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text('${_currentPosition!.altitude.toStringAsFixed(0)} m'),
                   ],
                 ),
               ),

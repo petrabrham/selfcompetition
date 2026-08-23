@@ -40,8 +40,8 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
   - Výběr a aktivace trasy probíhá výhradně na obrazovce Route Management.
   - Live Map nemá tlačítko pro výběr trasy.
   - Jméno aktivní trasy (nebo informace, že žádná není aktivní) se zobrazuje v horním panelu.
-- **Vykreslení nejlepší jízdy na aktivní trase:**
-  - Pokud je aktivní trasa nastavena a má alespoň jednu jízdu, na mapě se modrou čarou vykreslí GPX trasa jízdy s nejkratším `duration_seconds`.
+- **Vykreslení hlavní jízdy na aktivní trase:**
+  - Pokud je aktivní trasa nastavena a má hlavní jízdu, na mapě se modrou čarou vykreslí GPX trasa `main_ride_id`.
   - Pokud má aktivní trasa nastavený start a/nebo cíl (`start_lat/lon`, `end_lat/lon` nejsou `NULL`), zobrazí se odpovídající markery.
   - Pokud není žádná trasa aktivní, ani pokud aktivní trasa nemá žádnou jízdu, mapa žádnou stopu ani markery nezobrazuje.
 - **Real-time údaje během jízdy:**
@@ -105,13 +105,13 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
     - Jízda začíná od prvního průchodu startovní pozicí
     - Jízda končí posledním průchodem cílovou pozicí
   - Pokud start/cíl nejsou zadány: jízdy se používají jak jsou
-- **Hlavní jízda trasy (plánováno):**
+- **Hlavní jízda trasy:**
   - Nová trasa začíná s `main_ride_id = NULL`; první úspěšně přiřazená jízda se stane hlavní.
   - Uživatel může u jízdy použít kontextovou akci "Set as main ride for route".
   - Před přiřazením při zastavení záznamu, importu, přeřazení i změně hlavní jízdy se ověří GPX bod v tolerančním kruhu explicitního startu/cíle; neexplicitní hranice používají první/poslední bod GPX hlavní jízdy.
   - Při neúspěchu zůstane jízda nezařazená (`route_id = NULL`); neúspěšná změna hlavní jízdy zachová původní volbu.
   - Po smazání nebo přesunu hlavní jízdy se náhrada vybere podle nejdřívějšího `start_time`, potom nejnižšího `id`; bez náhrady se nastaví `NULL`.
-  - Hlavní jízda je odlišná od nejrychlejší jízdy používané pro modrou referenční čáru; nejrychlejší se vybírá podle nejnižšího `duration_seconds`.
+  - Hlavní jízda je odlišná od nejrychlejší jízdy: hlavní jízda určuje modrou mapovou čáru a implicitní hranice trasy, zatímco nejrychlejší jízda se používá ve statistikách.
 - Možnosti pro každou jízdu:
   - Zobrazit offline (bez internetu)
   - Exportovat do GPX formátu
@@ -120,8 +120,8 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - **Hromadný import GPX jízd (pro testování a rychlé naplnění dat):**
   - Akce "Import GPX" v Route Management otevře systémový výběr souborů
   - Uživatel může vybrat jeden nebo více `.gpx` souborů z `Downloads`, `Documents` nebo jiného dostupného umístění
-  - Pro každou jízdu se spočítá vzdálenost, čas a průměrná rychlost z GPX bodů
-  - Úspěšně importované soubory se uloží do interního `gpx/` adresáře a uživatel je informován souhrnnou hláškou
+  - Pro každou jízdu se spočítá vzdálenost, čas a průměrná rychlost z GPX bodů; pokud je aktivní trasa prázdná nebo validace projde, jízda se k ní přiřadí
+  - Úspěšně importované soubory se uloží do interního `gpx/` adresáře; nevyhovující jízdu lze ponechat nezařazenou nebo ručně přidat akcí `Add anyway`
 
 ### 4. Settings (Nastavení)
 - **Uživatelský profil:**
@@ -279,12 +279,12 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 - [x] Přeřazení jízdy mezi trasami / do nezařazených
 - [x] Hromadný import GPX jízd přes systémový výběr souborů (nezařazené jízdy, pro testování)
 - [x] Nastavení startu/cíle trasy na mapě
-- [ ] **Hlavní jízda trasy** - nullable `Routes.main_ride_id`, inicializace první úspěšnou jízdou, volba v kontextovém menu a deterministická náhrada
-- [ ] Validace přiřazení jízd podle explicitních nebo implicitních hranic trasy
-- [ ] **Aktivní trasa** - výběr a perzistence (`Settings.active_route_id`), zvýraznění v seznamu tras
-- [ ] Live Map: vykreslení nejlepší jízdy aktivní trasy (modrá stopa) a start/cíl markerů
-- [ ] Ride Statistics screen: statická tabulka jízd aktivní trasy (čas, vzdálenost, průměrná rychlost, ztráta na nejlepší čas)
-- [ ] Pause button v záznamu
+- [x] **Hlavní jízda trasy** - nullable `Routes.main_ride_id`, inicializace první úspěšnou jízdou, volba v kontextovém menu a deterministická náhrada
+- [x] Validace přiřazení jízd podle explicitních nebo implicitních hranic trasy
+- [x] **Aktivní trasa** - výběr a perzistence (`Settings.active_route_id`), zvýraznění v seznamu tras
+- [x] Live Map: vykreslení hlavní jízdy aktivní trasy (modrá stopa) a start/cíl markerů
+- [x] Ride Statistics screen: statická tabulka jízd aktivní trasy (čas, vzdálenost, průměrná rychlost, ztráta na nejlepší čas)
+- [x] Pause button v záznamu
 - **Doba:** 2 týdny
 
 ### Phase 3: Real-time Srovnávání

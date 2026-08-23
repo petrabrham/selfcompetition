@@ -13,6 +13,10 @@ Vytvorit spolehlivou spravu tras a ulozenych jizd tak, aby bylo mozne:
 
 Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stabilni datovy a uzivatelsky zaklad pro Phase 3.
 
+## Stav faze
+
+Phase 2 je dokoncena a overena na Android zarizeni. Implementovany rozsah zahrnuje spravu tras a jizd, aktivni trasu, hlavni jizdu, import GPX, validaci prirazeni, mapove prekryvy a staticke statistiky. Vypocet skutecneho cisteho casu, trimovani metadat a autodetekce pauz se presouvaji do `Phase3.md`.
+
 ## Jazyk uzivatelskeho rozhrani
 
 - Vsechny texty zobrazovane uzivateli budou v anglictine, vcetne nazvu obrazovek, tlacitek, popisku, dialogu, validacnich a chybovych hlaseni, tooltipu a prazdnych stavu.
@@ -27,7 +31,7 @@ Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stab
    - naparsuje GPS body,
    - spocita `distance_meters` (soucet Haversine vzdalenosti mezi body), `start_time`/`end_time` (prvni/posledni bod) a `avg_speed_kmh`,
    - presune soubor do `gpx/` (kolize reseny stejne jako u zaznamu jizdy, pripona `_01`, `_02`, ...),
-   - vlozi novy zaznam do `Rides` jako nezarazenou jizdu (`route_id = NULL`), s `user_nick` z aktualnich `Settings`.
+  - vlozi novy zaznam do `Rides` s `user_nick` z aktualnich `Settings`; pokud je aktivni trasa prazdna nebo validace projde, jizda se priradi k aktivni trase, jinak zustane neza razena (`route_id = NULL`) a uzivatel muze zvolit "Add anyway".
 4. Soubory bez pouzitelnych GPS bodu se neimportuji; uzivatel je informovan souhrnnou hlaskou (pocet importovanych, pocet selhanych).
 5. Import nijak nemeni uz importovane/ulozene jizdy; vybrany soubor se zkopiruje do interniho `gpx/` adresare.
 6. Importovane jizdy lze nasledne stejne jako ostatni nezarazene jizdy presunout k trase, prejmenovat kontext nebo smazat.
@@ -45,12 +49,12 @@ Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stab
 8. Smazani aktivni trasy nastavi `active_route_id` zpet na `NULL`.
 9. Aktivni trasa se obnovuje po restartu aplikace ze `Settings`.
 
-### Vykresleni nejlepsi jizdy na Live Map
+### Vykresleni hlavni jizdy na Live Map
 
-1. Pokud je trasa aktivni a ma alespon jednu jizdu, aplikace najde jizdu s nejnizsim `duration_seconds` ("nejlepsi cas").
-2. GPX teto jizdy se naparsuje a vykresli na mape modrou carou.
+1. Pokud je trasa aktivni a ma nastaveny `main_ride_id`, aplikace nacte tuto hlavni jizdu.
+2. GPX hlavni jizdy se naparsuje a vykresli na mape modrou carou.
 3. Pokud ma aktivni trasa nastaveny start a/nebo cil (`start_lat/lon`, `end_lat/lon` nejsou `NULL`), zobrazi se prislusne markery.
-4. Pokud zadna trasa neni aktivni, nebo aktivni trasa nema zadnou jizdu, mapa nezobrazuje zadnou stopu ani markery.
+4. Pokud zadna trasa neni aktivni, nebo aktivni trasa nema hlavni jizdu, mapa nezobrazuje modrou stopu ani markery.
 
 ### Ride Statistics (staticka tabulka)
 
@@ -58,7 +62,8 @@ Phase 2 neresi samotne realtime porovnavani ani ranking. Jejim vysledkem je stab
 2. Sloupce: datum a cas jizdy, vzdalenost (km, 1 desetinne misto), cas jizdy (HH:mm), prumerna rychlost (km/h), casova ztrata oproti nejlepsimu casu.
 3. Jizda s nejlepsim casem ma ztratu 0.
 4. Pokud zadna trasa neni aktivni, obrazovka zobrazi prazdny stav s vyzvou "Vyberte aktivni trasu ve Sprave tras".
-5. Zivy ranking, virtualni zavodnici a realtime porovnavani zustavaji mimo rozsah Phase 2 (viz Phase 3).
+5. Aktualni `duration_seconds` je zakladni rozdil zaznamenanych casu; skutecny cisty cas s trimovanim a pauzami je rozsah `Phase3.md`.
+6. Zivy ranking, virtualni zavodnici a realtime porovnavani zustavaji mimo rozsah Phase 2 (viz Phase 3).
 
 ## Zakladni pravidla
 
@@ -144,7 +149,7 @@ Nahradni jizda se vybere deterministicky podle nejdrivejsiho `start_time`, pri s
 - Stejny mechanismus umozni zobrazit, jakou vzdalenost cyklista ujel v predchozich jizdach v okamziku, kdy je na aktualni jizde. Upravene start/cil body a detekovane pauzy se zohledni pred vypoctem casove osy jizdy.
 - Pokud by cteni a vypocty z originalnich GPX byly pri realtime provozu prokazatelne prilis pomale, lze pozdeji pridat odvozeny cache soubor. Originalni GPX ale musi zustat zachovany jako zdroj pravdy.
 
-**Trimovani jizd (dulezite pro fazi 3):**
+**Trimovani jizd (planovano pro Phase 3):**
 
 Uzivatel se muze pripravovat na jizdu jeste pred fyzickym vyrazem: zapne zaznam, ulozi telefon, ceka, ... Podobne na konci: jizda skoncil, ale vypina zaznam az pozdeji. GPX soubor obsahuje vsechny body od prvniho zapnuti do vypnuti.
 
@@ -155,7 +160,7 @@ Pri nastaveni start a end pozic trasy (na mape) aplikace:
 4. Prepocita `start_time` (cas tohoto bodu), `duration_seconds` a `distance_meters` podle trimovanych bodu
 5. Fyzicky nemenuje GPX soubor - jen se zmeni metadata v SQLite
 
-**Autodetekce pauz v jizde (v GPX):**
+**Autodetekce pauz v jizde (planovano pro Phase 3):**
 
 Pokud je zapnuta v Settings, aplikace automaticky detekuje dlouhe cekani behem jizdy (semafory, zeleznicni prejezdy, atd.):
 - Hledaji se dvojice po sobe jdoucich bodu s:
