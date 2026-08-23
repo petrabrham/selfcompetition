@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:math' as math;
 import 'gps_service.dart';
 import 'database_service.dart';
 import 'gpx_service.dart';
@@ -278,8 +279,21 @@ class RideService {
 
     final startRadius = explicitStart == null ? implicitRadius : explicitRadius;
     final endRadius = explicitEnd == null ? implicitRadius : explicitRadius;
-    return (start == null || _containsPosition(positions, start, startRadius)) &&
-      (end == null || _containsPosition(positions, end, endRadius));
+    final startDistance = start == null ? null : _minimumDistance(positions, start);
+    final endDistance = end == null ? null : _minimumDistance(positions, end);
+    final startMatches = startDistance == null || startDistance <= startRadius;
+    final endMatches = endDistance == null || endDistance <= endRadius;
+
+    if (kDebugMode) {
+      debugPrint(
+        'Ride route validation: '
+        'start=${startDistance?.toStringAsFixed(1) ?? 'not defined'}m '
+        '(limit ${startRadius.toStringAsFixed(1)}m), '
+        'end=${endDistance?.toStringAsFixed(1) ?? 'not defined'}m '
+        '(limit ${endRadius.toStringAsFixed(1)}m)',
+      );
+    }
+    return startMatches && endMatches;
   }
 
   GPSPosition? _routePoint(
@@ -300,17 +314,53 @@ class RideService {
     );
   }
 
-  bool _containsPosition(
+  double _minimumDistance(
     List<GPSPosition> positions,
     GPSPosition target,
-    double radiusMeters,
   ) {
-    return positions.any((position) => GPSService.calculateDistance(
-          position.latitude,
-          position.longitude,
-          target.latitude,
-          target.longitude,
-        ) <= radiusMeters);
+    if (positions.length == 1) {
+      return GPSService.calculateDistance(
+        positions.first.latitude,
+        positions.first.longitude,
+        target.latitude,
+        target.longitude,
+      );
+    }
+
+    var minimum = double.infinity;
+    for (var index = 0; index < positions.length - 1; index++) {
+      final distance = _distanceFromTargetToSegment(
+        positions[index],
+        positions[index + 1],
+        target,
+      );
+      if (distance < minimum) minimum = distance;
+    }
+    return minimum;
+  }
+
+  double _distanceFromTargetToSegment(
+    GPSPosition start,
+    GPSPosition end,
+    GPSPosition target,
+  ) {
+    const metersPerLatitudeDegree = 111320.0;
+    final metersPerLongitudeDegree =
+        metersPerLatitudeDegree * math.cos(target.latitude * math.pi / 180);
+    final startX = (start.longitude - target.longitude) * metersPerLongitudeDegree;
+    final startY = (start.latitude - target.latitude) * metersPerLatitudeDegree;
+    final endX = (end.longitude - target.longitude) * metersPerLongitudeDegree;
+    final endY = (end.latitude - target.latitude) * metersPerLatitudeDegree;
+    final deltaX = endX - startX;
+    final deltaY = endY - startY;
+    final lengthSquared = deltaX * deltaX + deltaY * deltaY;
+    if (lengthSquared == 0) return math.sqrt(startX * startX + startY * startY);
+
+    final projection = (-(startX * deltaX + startY * deltaY) / lengthSquared)
+        .clamp(0.0, 1.0);
+    final closestX = startX + projection * deltaX;
+    final closestY = startY + projection * deltaY;
+    return math.sqrt(closestX * closestX + closestY * closestY);
   }
 
   /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.

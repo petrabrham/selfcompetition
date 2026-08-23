@@ -578,7 +578,9 @@ class _LiveMapScreenState extends State<LiveMapScreen>
         SnackBar(
           content: Text(
             success
-                ? '✅ Ride saved!'
+                ? error == null
+                    ? 'Ride saved!'
+                    : 'Ride saved as unassigned: $error'
                 : '❌ Error saving ride${error != null ? ': $error' : ''}',
           ),
           duration: Duration(seconds: 2),

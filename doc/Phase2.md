@@ -374,6 +374,52 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 17. Doplnit migracni, servisni a widget testy.
 18. Aktualizovat README a APP_REQUIREMENTS po dokonceni faze.
 
+## Plan validace na zarizeni
+
+### 1. Migrace databaze
+
+1. Nainstalovat aktualni debug APK nad existujici aplikaci s daty z predchozi verze.
+2. Spustit aplikaci a overit, ze se otevre bez chyby SQLite migrace.
+3. Overit, ze existujici trasy, jizdy, Settings a aktivni trasa zustaly zachovany.
+4. Overit, ze kazda existujici trasa s jizdami ma nastaveny `main_ride_id`; prazdna trasa ma `NULL`.
+
+### 2. Import a aktivni trasa
+
+1. Vytvorit prazdnou trasu a oznacit ji jako aktivni.
+2. Importovat jednu validni GPX jizdu ze systemoveho vyberu souboru.
+3. Overit, ze jizda patri do aktivni trasy a automaticky se stala hlavni jizdou.
+4. Importovat dalsi podobnou jizdu; overit, ze je automaticky prirazena k aktivni trase.
+5. Importovat vzdalenou jizdu; overit, ze zustane neza razena a aplikace nabidne "Add anyway".
+6. Zvolit "Add anyway" pro jednu odmitnutou jizdu a "Keep unassigned" pro jinou; overit oba vysledky v Route Management.
+
+### 3. Hranice trasy
+
+1. Bez explicitniho startu/cile overit, ze se pouziva prvni/posledni bod hlavni jizdy s implicitni toleranci 100 m.
+2. Nastavit start a cil z mapy a overit zobrazeni zelenych/cervenych tolerancnich kruhu na Live Map.
+3. Pokusit se priradit jizdu, ktera neprojde startem nebo cilem; overit, ze prirazeni selze.
+4. Pokusit se priradit jizdu, ktera prochazi obema explicitnimi kruhy; overit, ze se priradi.
+
+### 4. Hlavni jizda a mapa
+
+1. V detailu trasy overit vizualni oznaceni hlavni jizdy.
+2. Zmenit hlavni jizdu akci "Set as main ride for route".
+3. Otevrit Live Map a overit, ze modra cara odpovida nove hlavni jizde, ne nejrychlejsi jizde.
+4. Presunout hlavni jizdu do jine trasy a overit automatickou volbu nahrady.
+5. Smazat hlavni jizdu posledni v trase a overit `main_ride_id = NULL`.
+
+### 5. Statistiky a zobrazeni jizd
+
+1. Overit, ze Ride Statistics zobrazuje jen jizdy aktivni trasy, serazene podle `duration_seconds`.
+2. Overit poradove cislo, vzdalenost, prumernou rychlost a ztratu oproti prvni jizde.
+3. Otevrit libovolnou jizdu na mape; overit zelenou docasnou stopu, zachovani modre hlavni stopy a tlacitko pro ukonceni zeleneho zobrazeni.
+
+### 6. Zaznam nove jizdy
+
+1. S aktivni trasou nahrat kratkou jizdu prochazejici startem/cilem a overit prirazeni k trase.
+2. Nahrat jizdu mimo hranice trasy a overit ulozeni jako neza razene.
+3. Bez aktivni trasy nahrat jizdu a overit ulozeni jako neza razene.
+4. Overit vznik GPX souboru, metadata v databazi a aktualizaci seznamu i statistik.
+
 ## Akceptacni kriteria
 
 - Jizda bez vybrane trasy se ulozi s `route_id = NULL`.
