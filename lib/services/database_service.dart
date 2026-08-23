@@ -116,9 +116,15 @@ class DatabaseService {
       ''');
     }
     if (oldVersion < 6) {
-      await db.execute(
-        'ALTER TABLE Routes ADD COLUMN main_ride_id INTEGER',
+      final routeColumns = await db.rawQuery('PRAGMA table_info(Routes)');
+      final hasMainRideId = routeColumns.any(
+        (column) => column['name'] == 'main_ride_id',
       );
+      if (!hasMainRideId) {
+        await db.execute(
+          'ALTER TABLE Routes ADD COLUMN main_ride_id INTEGER',
+        );
+      }
       await db.execute('''
         UPDATE Routes
         SET main_ride_id = (

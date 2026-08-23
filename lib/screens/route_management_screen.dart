@@ -106,8 +106,41 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
       );
       return;
     }
-    final result = await RideService.instance.importGpxBytes(files);
+    final activeRouteId = await DatabaseService.instance.getActiveRouteId();
+    final result = await RideService.instance.importGpxBytes(
+      files,
+      targetRouteId: activeRouteId,
+    );
     if (!context.mounted) return;
+
+    for (final rejected in result.unassigned) {
+      final addAnyway = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Ride does not match route'),
+          content: Text(
+            '${rejected.name} did not pass the route start or end check. Add it to the active route anyway?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Keep unassigned'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Add anyway'),
+            ),
+          ],
+        ),
+      );
+      if (addAnyway == true && activeRouteId != null) {
+        await DatabaseService.instance.updateRide(
+          rejected.id,
+          {'route_id': activeRouteId},
+        );
+      }
+      if (!context.mounted) return;
+    }
 
     final message = result.failed.isEmpty && result.imported == 0
       ? 'Imported ${result.imported} rides.'

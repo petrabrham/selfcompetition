@@ -257,10 +257,12 @@ class RideService {
     if (positions.isEmpty) return false;
     final route = await DatabaseService.instance.getRoute(routeId);
     if (route == null) return false;
-    final tolerance = ((route['tolerance_radius'] as num?)?.toDouble() ?? 50) / 2;
-
-    var start = _routePoint(route, 'start_lat', 'start_lon');
-    var end = _routePoint(route, 'end_lat', 'end_lon');
+    final explicitRadius = ((route['tolerance_radius'] as num?)?.toDouble() ?? 50) / 2;
+    const implicitRadius = 100.0;
+    final explicitStart = _routePoint(route, 'start_lat', 'start_lon');
+    final explicitEnd = _routePoint(route, 'end_lat', 'end_lon');
+    var start = explicitStart;
+    var end = explicitEnd;
     final mainRideId = await DatabaseService.instance.getMainRideId(routeId);
     if ((start == null || end == null) && mainRideId != null) {
       final mainRide = await DatabaseService.instance.getRide(mainRideId);
@@ -274,8 +276,10 @@ class RideService {
       }
     }
 
-    return (start == null || _containsPosition(positions, start, tolerance)) &&
-        (end == null || _containsPosition(positions, end, tolerance));
+    final startRadius = explicitStart == null ? implicitRadius : explicitRadius;
+    final endRadius = explicitEnd == null ? implicitRadius : explicitRadius;
+    return (start == null || _containsPosition(positions, start, startRadius)) &&
+      (end == null || _containsPosition(positions, end, endRadius));
   }
 
   GPSPosition? _routePoint(
@@ -385,9 +389,13 @@ class RideService {
     );
   }
 
-  Future<ImportResult> importGpxBytes(List<ImportedGpxFile> files) async {
+  Future<ImportResult> importGpxBytes(
+    List<ImportedGpxFile> files, {
+    int? targetRouteId,
+  }) async {
     var importedCount = 0;
     final failed = <String, String>{};
+    final unassigned = <ImportedRideRejection>[];
     final settings = await DatabaseService.instance.getSettings();
     final userNick = settings?['user_nick'] as String? ?? 'Import';
 
@@ -420,8 +428,17 @@ class RideService {
             ? (distanceMeters / 1000) / (durationSeconds / 3600)
             : 0.0;
 
-        await DatabaseService.instance.insertRide({
-          'route_id': null,
+        var assignedRouteId = targetRouteId;
+        if (targetRouteId != null) {
+          final existingRides = await DatabaseService.instance.getRidesByRoute(targetRouteId);
+          if (existingRides.isNotEmpty &&
+              !await validatePositionsForRoute(targetRouteId, positions)) {
+            assignedRouteId = null;
+          }
+        }
+
+        final rideId = await DatabaseService.instance.insertRide({
+          'route_id': assignedRouteId,
           'gpx_file_path': fileName,
           'start_time': startTime.toIso8601String(),
           'end_time': endTime.toIso8601String(),
@@ -432,6 +449,9 @@ class RideService {
           'user_nick': userNick,
           'created_at': DateTime.now().toIso8601String(),
         });
+        if (targetRouteId != null && assignedRouteId == null) {
+          unassigned.add(ImportedRideRejection(id: rideId, name: file.name));
+        }
         importedCount++;
       } catch (e) {
         failed[file.name] = e.toString();
@@ -440,6 +460,7 @@ class RideService {
     return ImportResult(
       imported: importedCount,
       failed: failed,
+      unassigned: unassigned,
       directoryPath: await GpxService.instance.getImportDirectoryPath(),
     );
   }
@@ -455,11 +476,20 @@ class ImportedGpxFile {
 class ImportResult {
   final int imported;
   final Map<String, String> failed;
+  final List<ImportedRideRejection> unassigned;
   final String directoryPath;
 
   ImportResult({
     required this.imported,
     required this.failed,
+    this.unassigned = const [],
     required this.directoryPath,
   });
+}
+
+class ImportedRideRejection {
+  final int id;
+  final String name;
+
+  ImportedRideRejection({required this.id, required this.name});
 }
