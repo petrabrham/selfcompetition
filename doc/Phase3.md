@@ -11,6 +11,9 @@ Turn the stored GPX rides into a fair real-time comparison experience. The first
 - The original GPX file remains immutable.
 - Derived values are stored in SQLite for fast statistics and ranking.
 - A processed GPX copy is not created unless future profiling proves it necessary.
+- `recorded_duration_seconds` stores the raw duration from the first to last retained GPX timestamp.
+- `clean_duration_seconds` stores the duration after trimming and pause detection.
+- `Settings.show_clean_duration` controls whether statistics and future real-time UI prefer clean duration or recorded duration, with a safe fallback to recorded duration when clean data is unavailable.
 
 ### Processing Rules
 
@@ -18,15 +21,18 @@ Turn the stored GPX rides into a fair real-time comparison experience. The first
 2. Trim the ride to the route boundaries:
    - use explicit route start/end circles when configured;
    - otherwise use the first/last point of the route main ride.
-3. Detect pauses between consecutive retained points:
-   - distance smaller than `pause_max_distance_meters`;
-   - time gap longer than `pause_min_duration_seconds`;
-   - exclude that time from `duration_seconds`.
+3. Detect pauses in the retained GPX path:
+   - use `Settings.pause_radius_meters` (default 20 m) as the stationary radius around a pause anchor point;
+   - begin a candidate pause at a retained point and keep collecting following points while they remain within the pause radius of that anchor;
+   - if the stationary interval is at least `Settings.pause_min_duration_seconds` (default 90 s), exclude its duration;
+   - for sparse recorded GPX with no intermediate stationary points, treat a timestamp gap as a pause only when its average movement is at most 1 km/h;
+   - exclude that time from `clean_duration_seconds`.
 4. Calculate and persist:
    - `saved_at`: first original GPX timestamp;
-   - `start_time`: timestamp of the trimmed start;
+   - `start_time`: timestamp of the clean start after crossing the route start boundary;
    - `end_time`: timestamp of the trimmed end;
-   - `duration_seconds`: elapsed time minus detected pauses;
+   - `recorded_duration_seconds`: raw trimmed elapsed time;
+   - `clean_duration_seconds`: trimmed elapsed time minus detected pauses;
    - `distance_meters`: distance along the trimmed path;
    - `avg_speed_kmh`: distance divided by clean duration;
    - `updated_at`.
@@ -46,7 +52,7 @@ Recalculate derived ride metadata before saving the database update when:
 
 - A ride started before a configured start point begins timing at that point.
 - A ride ended after a configured end point stops timing at that point.
-- Long stationary gaps are excluded from clean duration when pause detection is enabled.
+- Long stationary gaps are excluded from clean duration.
 - Statistics and ranking use stored `duration_seconds`, not raw first-to-last timestamps.
 - Recalculation never modifies the original GPX file.
 

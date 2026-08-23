@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import '../services/database_service.dart';
+import '../services/ride_service.dart';
 
 // Screens - Settings screen
 class SettingsScreen extends StatefulWidget {
@@ -19,6 +20,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   double _minDistance = 5.0; // meters
   int _numRidesToDisplay = 3;
   double _screenOffTimeoutSeconds = 30.0;
+  bool _showCleanDuration = true;
+  double _pauseRadiusMeters = 20.0;
+  double _pauseMinDurationSeconds = 90.0;
   bool _isLoading = false;
   String? _errorMessage;
   String? _nickError;
@@ -76,6 +80,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _numRidesToDisplay = settings['num_rides_to_display'] ?? 3;
           _screenOffTimeoutSeconds =
               (settings['screen_off_timeout_seconds'] ?? 30).toDouble();
+              _showCleanDuration =
+                (settings['show_clean_duration'] as num?)?.toInt() != 0;
+              _pauseRadiusMeters =
+                (settings['pause_radius_meters'] as num?)?.toDouble() ?? 20.0;
+              _pauseMinDurationSeconds =
+                (settings['pause_min_duration_seconds'] as num?)?.toDouble() ?? 90.0;
           // Validate after loading from database
           _validateNick();
         });
@@ -113,7 +123,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'min_distance_threshold_meters': _minDistance,
         'num_rides_to_display': _numRidesToDisplay,
         'screen_off_timeout_seconds': _screenOffTimeoutSeconds.toInt(),
+        'show_clean_duration': _showCleanDuration ? 1 : 0,
+        'pause_radius_meters': _pauseRadiusMeters,
+        'pause_min_duration_seconds': _pauseMinDurationSeconds.toInt(),
       });
+      await RideService.instance.recalculateCleanDurations();
 
       // Debug: Read and print settings from database
       if (kDebugMode) {
@@ -305,6 +319,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               Text(_formatTimeout(_screenOffTimeoutSeconds.round())),
+            ],
+          ),
+          const SizedBox(height: 24),
+
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'Show clean duration',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            subtitle: const Text(
+              'Prefer duration without detected pauses',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            value: _showCleanDuration,
+            onChanged: (value) {
+              setState(() {
+                _showCleanDuration = value;
+              });
+            },
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Pause radius',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const Text(
+            'Treat movement within this radius as stationary',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _pauseRadiusMeters,
+                  min: 10.0,
+                  max: 50.0,
+                  divisions: 8,
+                  label: '${_pauseRadiusMeters.toStringAsFixed(0)}m',
+                  onChanged: (value) {
+                    setState(() {
+                      _pauseRadiusMeters = value;
+                    });
+                  },
+                ),
+              ),
+              Text('${_pauseRadiusMeters.toStringAsFixed(0)}m'),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'Minimum pause duration',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const Text(
+            'Ignore stationary periods shorter than this',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _pauseMinDurationSeconds,
+                  min: 60.0,
+                  max: 300.0,
+                  divisions: 8,
+                  label: _formatTimeout(_pauseMinDurationSeconds.toInt()),
+                  onChanged: (value) {
+                    setState(() {
+                      _pauseMinDurationSeconds = value;
+                    });
+                  },
+                ),
+              ),
+              Text(_formatTimeout(_pauseMinDurationSeconds.toInt())),
             ],
           ),
           const SizedBox(height: 24),

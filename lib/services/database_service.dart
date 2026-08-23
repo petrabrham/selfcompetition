@@ -26,7 +26,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 6,
+      version: 8,
       onCreate: _createTables,
       onUpgrade: _upgradeDatabase,
     );
@@ -135,6 +135,65 @@ class DatabaseService {
         )
       ''');
     }
+    if (oldVersion < 7) {
+      final settingColumns = await db.rawQuery('PRAGMA table_info(Settings)');
+      final hasPauseDetectionEnabled = settingColumns.any(
+        (column) => column['name'] == 'pause_detection_enabled',
+      );
+      if (!hasPauseDetectionEnabled) {
+        await db.execute(
+          'ALTER TABLE Settings ADD COLUMN pause_detection_enabled INTEGER DEFAULT 1',
+        );
+      }
+    }
+    if (oldVersion < 8) {
+      final settingColumns = await db.rawQuery('PRAGMA table_info(Settings)');
+      final hasShowCleanDuration = settingColumns.any(
+        (column) => column['name'] == 'show_clean_duration',
+      );
+      if (!hasShowCleanDuration) {
+        await db.execute(
+          'ALTER TABLE Settings ADD COLUMN show_clean_duration INTEGER DEFAULT 1',
+        );
+      }
+      final hasPauseRadius = settingColumns.any(
+        (column) => column['name'] == 'pause_radius_meters',
+      );
+      if (!hasPauseRadius) {
+        await db.execute(
+          'ALTER TABLE Settings ADD COLUMN pause_radius_meters REAL DEFAULT 20.0',
+        );
+      }
+      final hasPauseDuration = settingColumns.any(
+        (column) => column['name'] == 'pause_min_duration_seconds',
+      );
+      if (!hasPauseDuration) {
+        await db.execute(
+          'ALTER TABLE Settings ADD COLUMN pause_min_duration_seconds INTEGER DEFAULT 90',
+        );
+      }
+      final rideColumns = await db.rawQuery('PRAGMA table_info(Rides)');
+      final hasRecordedDuration = rideColumns.any(
+        (column) => column['name'] == 'recorded_duration_seconds',
+      );
+      if (!hasRecordedDuration) {
+        await db.execute(
+          'ALTER TABLE Rides ADD COLUMN recorded_duration_seconds INTEGER',
+        );
+      }
+      final hasCleanDuration = rideColumns.any(
+        (column) => column['name'] == 'clean_duration_seconds',
+      );
+      if (!hasCleanDuration) {
+        await db.execute(
+          'ALTER TABLE Rides ADD COLUMN clean_duration_seconds INTEGER',
+        );
+      }
+      await db.execute('''
+        UPDATE Rides
+        SET recorded_duration_seconds = COALESCE(recorded_duration_seconds, duration_seconds)
+      ''');
+    }
   }
 
   /// Create all tables
@@ -168,6 +227,8 @@ class DatabaseService {
         end_time TEXT,
         saved_at TEXT,
         duration_seconds INTEGER,
+        recorded_duration_seconds INTEGER,
+        clean_duration_seconds INTEGER,
         distance_meters REAL DEFAULT 0.0,
         avg_speed_kmh REAL DEFAULT 0.0,
         user_nick TEXT,
@@ -187,6 +248,9 @@ class DatabaseService {
         num_rides_to_display INTEGER DEFAULT 3,
         screen_off_timeout_seconds INTEGER DEFAULT 30,
         active_route_id INTEGER,
+        show_clean_duration INTEGER DEFAULT 1,
+        pause_radius_meters REAL DEFAULT 20.0,
+        pause_min_duration_seconds INTEGER DEFAULT 90,
         updated_at TEXT NOT NULL
       )
     ''');
@@ -200,6 +264,9 @@ class DatabaseService {
       'num_rides_to_display': 3,
       'screen_off_timeout_seconds': 30,
       'active_route_id': null,
+      'show_clean_duration': 1,
+      'pause_radius_meters': 20.0,
+      'pause_min_duration_seconds': 90,
       'updated_at': DateTime.now().toIso8601String(),
     });
   }

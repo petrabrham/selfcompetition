@@ -252,6 +252,13 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     );
   }
 
+  String _formatRecordingDuration(Duration duration) {
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    return '${twoDigits(duration.inHours)}:'
+        '${twoDigits(duration.inMinutes.remainder(60))}:'
+        '${twoDigits(duration.inSeconds.remainder(60))}';
+  }
+
   void _toggleFollowPosition() {
     if (_currentPosition == null) return;
 
@@ -796,8 +803,13 @@ class _LiveMapScreenState extends State<LiveMapScreen>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '${((RideService.instance.currentRide?.totalDistance ?? 0) / 1000).toStringAsFixed(2)} km',
+                      RideService.instance.hasCleanRideStarted
+                          ? 'Clean time: ${_formatRecordingDuration(RideService.instance.currentCleanDuration)}'
+                          : 'Clean time: waiting for start',
                       style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '${((RideService.instance.currentRide?.totalDistance ?? 0) / 1000).toStringAsFixed(2)} km',
                     ),
                     Text('${_currentPosition!.altitude.toStringAsFixed(0)} m'),
                   ],

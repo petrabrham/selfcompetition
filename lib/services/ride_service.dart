@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'gps_service.dart';
 import 'database_service.dart';
 import 'gpx_service.dart';
+import 'gpx_processing_service.dart';
 
 /// Model pro jednu najedtenou jízdu
 class RecordedRide {
@@ -61,6 +62,11 @@ class RideService {
   bool _isPaused = false;
   String? _lastError;
   int? _selectedRouteId;
+  GPSPosition? _cleanStartPoint;
+  double? _cleanStartRadiusMeters;
+  int? _cleanStartIndex;
+  double _pauseRadiusMeters = 20.0;
+  int _pauseMinDurationSeconds = 90;
 
   RideService._internal();
 
@@ -75,6 +81,17 @@ class RideService {
   String? get lastError => _lastError;
 
   int? get selectedRouteId => _selectedRouteId;
+
+  bool get hasCleanRideStarted => _cleanStartIndex != null;
+
+  Duration get currentCleanDuration {
+    final ride = _currentRide;
+    final startIndex = _cleanStartIndex;
+    if (ride == null || startIndex == null || startIndex >= ride.positions.length) {
+      return Duration.zero;
+    }
+    return _liveCleanDuration(ride.positions.sublist(startIndex));
+  }
 
   /// Začni záznam nové jízdy
   Future<void> startRecording({required String userId, int? routeId}) async {
@@ -92,7 +109,16 @@ class RideService {
       positions: [],
     );
     _currentRide!.userId = userId;
-      _selectedRouteId = routeId;
+    _selectedRouteId = routeId;
+    _cleanStartIndex = null;
+    _cleanStartPoint = null;
+    _cleanStartRadiusMeters = null;
+    final settings = await DatabaseService.instance.getSettings();
+    _pauseRadiusMeters =
+      (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0;
+    _pauseMinDurationSeconds =
+      (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90;
+    await _configureCleanStart(routeId);
     _isRecording = true;
     _isPaused = false;
 
@@ -111,6 +137,7 @@ class RideService {
     final currentPosition = GPSService.instance.currentPosition;
     if (currentPosition != null) {
       _currentRide!.addPosition(currentPosition);
+      _checkCleanStart(currentPosition);
     }
   }
 
@@ -118,6 +145,7 @@ class RideService {
   void _onPositionUpdate(GPSPosition position) {
     if (_isRecording && !_isPaused && _currentRide != null) {
       _currentRide!.addPosition(position);
+      _checkCleanStart(position);
       if (kDebugMode) {
         debugPrint(
           'Ride point #${_currentRide!.positions.length}: '
@@ -128,6 +156,71 @@ class RideService {
         );
       }
     }
+  }
+
+  Future<void> _configureCleanStart(int? routeId) async {
+    if (routeId == null) {
+      _cleanStartIndex = 0;
+      return;
+    }
+    final route = await DatabaseService.instance.getRoute(routeId);
+    if (route == null) {
+      _cleanStartIndex = 0;
+      return;
+    }
+    _cleanStartPoint = _routePoint(route, 'start_lat', 'start_lon');
+    _cleanStartRadiusMeters = ((route['tolerance_radius'] as num?)?.toDouble() ?? 50) / 2;
+
+    if (_cleanStartPoint == null) {
+      final mainRideId = await DatabaseService.instance.getMainRideId(routeId);
+      final mainRide = mainRideId == null
+          ? null
+          : await DatabaseService.instance.getRide(mainRideId);
+      final fileName = mainRide?['gpx_file_path'] as String?;
+      if (fileName != null && fileName.isNotEmpty) {
+        final positions = await GpxService.instance.loadRide(fileName);
+        if (positions.isNotEmpty) {
+          _cleanStartPoint = positions.first;
+          _cleanStartRadiusMeters = 100.0;
+        }
+      }
+    }
+  }
+
+  void _checkCleanStart(GPSPosition position) {
+    if (_cleanStartIndex != null || _currentRide == null) return;
+    final startPoint = _cleanStartPoint;
+    final radius = _cleanStartRadiusMeters;
+    if (startPoint == null || radius == null) {
+      _cleanStartIndex = 0;
+      return;
+    }
+    if (GPSService.calculateDistance(
+          position.latitude,
+          position.longitude,
+          startPoint.latitude,
+          startPoint.longitude,
+        ) <= radius) {
+      _cleanStartIndex = _currentRide!.positions.length - 1;
+      if (kDebugMode) debugPrint('Ride: Clean timer started at route start');
+    }
+  }
+
+  Duration _liveCleanDuration(List<GPSPosition> positions) {
+    final metrics = GpxProcessingService.instance.calculateDurations(
+      positions,
+      pauseRadiusMeters: _pauseRadiusMeters,
+      minimumPauseDurationSeconds: _pauseMinDurationSeconds,
+    );
+    if (positions.isEmpty) return Duration.zero;
+    final secondsSinceLastPoint = DateTime.now()
+        .difference(positions.last.timestamp)
+        .inSeconds;
+    final tailSeconds = (secondsSinceLastPoint >= _pauseMinDurationSeconds
+        ? 0
+      : secondsSinceLastPoint.clamp(0, _pauseMinDurationSeconds))
+      .toInt();
+    return Duration(seconds: metrics.cleanDurationSeconds + tailSeconds);
   }
 
   /// Zastav záznam a ulož jízdu do DB
@@ -177,15 +270,26 @@ class RideService {
       );
 
       // Save ride metadata to DB with GPX filename
+      final settings = await DatabaseService.instance.getSettings();
+      final cleanPositions = _cleanStartIndex == null
+          ? <GPSPosition>[]
+          : _currentRide!.positions.sublist(_cleanStartIndex!);
+      final durationMetrics = _calculateDurationMetrics(
+        cleanPositions,
+        settings,
+      );
+      final cleanStartTime = cleanPositions.isEmpty
+          ? _currentRide!.startTime
+          : cleanPositions.first.timestamp;
       final rideId = await DatabaseService.instance.insertRide({
         'route_id': routeId,
         'gpx_file_path': gpxFilename, // Now just the filename
-        'start_time': _currentRide!.startTime.toIso8601String(),
+        'start_time': cleanStartTime.toIso8601String(),
         'end_time': _currentRide!.endTime!.toIso8601String(),
         'saved_at': _currentRide!.startTime.toIso8601String(),
-        'duration_seconds': _currentRide!.endTime!
-          .difference(_currentRide!.startTime)
-          .inSeconds,
+        'duration_seconds': durationMetrics.recordedDurationSeconds,
+        'recorded_duration_seconds': durationMetrics.recordedDurationSeconds,
+        'clean_duration_seconds': durationMetrics.cleanDurationSeconds,
         'distance_meters': _currentRide!.totalDistance,
         'avg_speed_kmh': _currentRide!.avgSpeed * 3.6, // Konvertuj na km/h
         'user_nick': _currentRide!.userId ?? 'Unknown',
@@ -363,6 +467,39 @@ class RideService {
     return math.sqrt(closestX * closestX + closestY * closestY);
   }
 
+  RideDurationMetrics _calculateDurationMetrics(
+    List<GPSPosition> positions,
+    Map<String, dynamic>? settings,
+  ) {
+    return GpxProcessingService.instance.calculateDurations(
+      positions,
+      pauseRadiusMeters:
+          (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0,
+      minimumPauseDurationSeconds:
+          (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90,
+    );
+  }
+
+  Future<void> recalculateCleanDurations() async {
+    final settings = await DatabaseService.instance.getSettings();
+    final rides = await DatabaseService.instance.getAllRides();
+    for (final ride in rides) {
+      final fileName = ride['gpx_file_path'] as String?;
+      if (fileName == null || fileName.isEmpty) continue;
+      try {
+        final positions = await GpxService.instance.loadRide(fileName);
+        final metrics = _calculateDurationMetrics(positions, settings);
+        await DatabaseService.instance.updateRide(ride['id'] as int, {
+          'recorded_duration_seconds': metrics.recordedDurationSeconds,
+          'clean_duration_seconds': metrics.cleanDurationSeconds,
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+      } catch (error) {
+        if (kDebugMode) debugPrint('Clean duration recalculation failed: $error');
+      }
+    }
+  }
+
   /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.
   Future<ImportResult> importGpxFiles() async {
     final fileNames = await GpxService.instance.listImportableFiles();
@@ -402,9 +539,10 @@ class RideService {
 
         final startTime = positions.first.timestamp;
         final endTime = positions.last.timestamp;
-        final durationSeconds = endTime.difference(startTime).inSeconds;
-        final avgSpeedKmh = durationSeconds > 0
-            ? (distanceMeters / 1000) / (durationSeconds / 3600)
+        final durationMetrics = _calculateDurationMetrics(positions, settings);
+        final avgSpeedKmh = durationMetrics.recordedDurationSeconds > 0
+          ? (distanceMeters / 1000) /
+            (durationMetrics.recordedDurationSeconds / 3600)
             : 0.0;
 
         final finalFileName =
@@ -416,7 +554,9 @@ class RideService {
           'start_time': startTime.toIso8601String(),
           'end_time': endTime.toIso8601String(),
           'saved_at': startTime.toIso8601String(),
-          'duration_seconds': durationSeconds,
+          'duration_seconds': durationMetrics.recordedDurationSeconds,
+          'recorded_duration_seconds': durationMetrics.recordedDurationSeconds,
+          'clean_duration_seconds': durationMetrics.cleanDurationSeconds,
           'distance_meters': distanceMeters,
           'avg_speed_kmh': avgSpeedKmh,
           'user_nick': userNick,
@@ -473,9 +613,10 @@ class RideService {
         }
         final startTime = positions.first.timestamp;
         final endTime = positions.last.timestamp;
-        final durationSeconds = endTime.difference(startTime).inSeconds;
-        final avgSpeedKmh = durationSeconds > 0
-            ? (distanceMeters / 1000) / (durationSeconds / 3600)
+        final durationMetrics = _calculateDurationMetrics(positions, settings);
+        final avgSpeedKmh = durationMetrics.recordedDurationSeconds > 0
+          ? (distanceMeters / 1000) /
+            (durationMetrics.recordedDurationSeconds / 3600)
             : 0.0;
 
         var assignedRouteId = targetRouteId;
@@ -493,7 +634,9 @@ class RideService {
           'start_time': startTime.toIso8601String(),
           'end_time': endTime.toIso8601String(),
           'saved_at': startTime.toIso8601String(),
-          'duration_seconds': durationSeconds,
+          'duration_seconds': durationMetrics.recordedDurationSeconds,
+          'recorded_duration_seconds': durationMetrics.recordedDurationSeconds,
+          'clean_duration_seconds': durationMetrics.cleanDurationSeconds,
           'distance_meters': distanceMeters,
           'avg_speed_kmh': avgSpeedKmh,
           'user_nick': userNick,

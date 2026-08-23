@@ -10,18 +10,26 @@ class RideStatisticsScreen extends StatefulWidget {
 }
 
 class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
-  Future<List<Map<String, dynamic>>> _loadRides() async {
+  Future<_StatisticsData> _loadStatistics() async {
+    final settings = await DatabaseService.instance.getSettings();
+    final showCleanDuration =
+        (settings?['show_clean_duration'] as num?)?.toInt() != 0;
     final routeId = await DatabaseService.instance.getActiveRouteId();
-    if (routeId == null) return [];
+    if (routeId == null) {
+      return _StatisticsData([], showCleanDuration);
+    }
     final rides = (await DatabaseService.instance.getRidesByRoute(routeId)).toList();
-    rides.sort((a, b) => _durationOf(a).compareTo(_durationOf(b)));
-    return rides;
+    rides.sort(
+      (a, b) => _durationOf(a, showCleanDuration)
+          .compareTo(_durationOf(b, showCleanDuration)),
+    );
+    return _StatisticsData(rides, showCleanDuration);
   }
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<Map<String, dynamic>>>(
-      future: _loadRides(),
+    return FutureBuilder<_StatisticsData>(
+      future: _loadStatistics(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -30,14 +38,15 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
 
-        final rides = snapshot.data ?? [];
+        final statistics = snapshot.data ?? const _StatisticsData([], true);
+        final rides = statistics.rides;
         if (rides.isEmpty) {
           return const Center(
             child: Text('Select an active route in Route Management'),
           );
         }
 
-        final bestDuration = _durationOf(rides.first);
+        final bestDuration = _durationOf(rides.first, statistics.showCleanDuration);
         return ListView(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
           children: [
@@ -54,18 +63,22 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
               dataRowMaxHeight: 42,
               headingTextStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
               dataTextStyle: const TextStyle(fontSize: 10),
-              columns: const [
-                DataColumn(label: Text('#')),
-                DataColumn(label: Text('Datum')),
-                DataColumn(label: Text('Time')),
-                DataColumn(label: Text('Distance')),
-                DataColumn(label: Text('Average')),
-                DataColumn(label: Text('Loss')),
+              columns: [
+                const DataColumn(label: Text('#')),
+                const DataColumn(label: Text('Date')),
+                DataColumn(
+                  label: Text(
+                    statistics.showCleanDuration ? 'Clean time' : 'Recorded time',
+                  ),
+                ),
+                const DataColumn(label: Text('Distance')),
+                const DataColumn(label: Text('Average')),
+                const DataColumn(label: Text('Loss')),
               ],
                 rows: rides.asMap().entries.map((entry) {
                   final index = entry.key;
                   final ride = entry.value;
-                  final duration = _durationOf(ride);
+                  final duration = _durationOf(ride, statistics.showCleanDuration);
                   final loss = duration - bestDuration;
                   return DataRow(cells: [
                     DataCell(Text('${index + 1}')),
@@ -83,9 +96,14 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
     );
   }
 
-  int _durationOf(Map<String, dynamic> ride) {
-    final stored = (ride['duration_seconds'] as num?)?.toInt();
+  int _durationOf(Map<String, dynamic> ride, bool preferCleanDuration) {
+    final stored = preferCleanDuration
+        ? (ride['clean_duration_seconds'] as num?)?.toInt() ??
+            (ride['recorded_duration_seconds'] as num?)?.toInt()
+        : (ride['recorded_duration_seconds'] as num?)?.toInt();
     if (stored != null) return stored;
+    final legacy = (ride['duration_seconds'] as num?)?.toInt();
+    if (legacy != null) return legacy;
     final start = DateTime.tryParse(ride['start_time'] as String? ?? '');
     final end = DateTime.tryParse(ride['end_time'] as String? ?? '');
     return start == null || end == null ? 0 : end.difference(start).inSeconds;
@@ -110,4 +128,11 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
     final duration = Duration(seconds: seconds < 0 ? 0 : seconds);
     return '${duration.inHours.toString().padLeft(2, '0')}:${duration.inMinutes.remainder(60).toString().padLeft(2, '0')}';
   }
+}
+
+class _StatisticsData {
+  final List<Map<String, dynamic>> rides;
+  final bool showCleanDuration;
+
+  const _StatisticsData(this.rides, this.showCleanDuration);
 }

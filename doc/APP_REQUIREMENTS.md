@@ -289,6 +289,7 @@ _Aplikace pro sledování a srovnávání cyklistických jízd_
 
 ### Phase 3: Real-time Srovnávání
 **Cíl:** Motivace během jízdy nad připravenými trasami a uloženými jízdami
+- [ ] Pause detection alghorithm
 - [ ] Virtuální závodníci na mapě
 - [ ] Real-time ranking (X/Y)
 - [ ] Časový rozdíl oproti vyšší pozici

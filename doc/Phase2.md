@@ -164,7 +164,7 @@ Pri nastaveni start a end pozic trasy (na mape) aplikace:
 
 Pokud je zapnuta v Settings, aplikace automaticky detekuje dlouhe cekani behem jizdy (semafory, zeleznicni prejezdy, atd.):
 - Hledaji se dvojice po sobe jdoucich bodu s:
-  - Vzdalenosti < `pause_max_distance` (default 20m)
+  - Zůstani v `pause_radius_meters` (default 20m) od kotviciho bodu pauzy
   - A casovym skokem > `pause_min_duration` (default 60 sekund)
 - Takove casti se vypoustejici z vypoctu `duration_seconds`
 - Vyhodne i pro zapauzovani: pokud uzivatel zapomene stiskout PAUSE, aplikace to zjisti
@@ -210,8 +210,8 @@ Doplnit tabulku `Settings` o nove pole pro konfiguraci autodetekce pauz:
   - `num_rides_to_compare`
 - **Nove (pro autodetekci pauz):**
   - `pause_detection_enabled` (BOOLEAN, default: 1/true)
-  - `pause_max_distance_meters` (INTEGER, default: 20) - maximalni vzdalenost mezi body, aby se pocitaly jako "stejne miste"
-  - `pause_min_duration_seconds` (INTEGER, default: 60) - minimalni cas skoku mezi body, aby se pocital jako pausa
+  - `pause_radius_meters` (REAL, default: 20) - polomer prostoru, ve kterem se jizda povazuje za stojici
+  - `pause_min_duration_seconds` (INTEGER, default: 90) - minimalni doba stani, aby se pocitala jako pausa
 - **Nove (pro aktivni trasu):**
   - `active_route_id` (INTEGER, nullable, FK na `Routes.id`) - aktualne aktivni trasa; `NULL` = zadna trasa neni aktivni
 
@@ -357,14 +357,14 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
 ## Poradi implementace
 
 1. Ujasnit a migrovat databazove schema tras a jizd na nullable `route_id` (bez `end_time`, s `duration_seconds`, `saved_at`, `start_time`).
-2. Doplnit Settings o nove pole pro autodetekci pauz: `pause_detection_enabled`, `pause_max_distance_meters`, `pause_min_duration_seconds`.
+2. Doplnit Settings o nove pole pro autodetekci pauz: `pause_detection_enabled`, `pause_radius_meters`, `pause_min_duration_seconds`.
 3. Implementovat bezpecne ukladani a zobrazovani neza razenych jizd.
 4. Doplnit CRUD operace pro trasy.
 5. Doplnit CRUD operace a agregace pro jizdy.
 6. **Implementovat GpxProcessingService:**
    - Parsing GPX bodu z souboru
    - Trimovani podle start/end pozic
-   - **Autodetekce pauz:** najiti dvojic bodu s vzdalenosti < pause_max_distance a casovym skokem > pause_min_duration
+  - **Autodetekce pauz:** detekce prostoroveho useku v `pause_radius_meters`, ktery trva dele nez `pause_min_duration_seconds`
    - Vypocet ciste duration_seconds a distance_meters (bez pauz)
 7. Pridat persistentni aktivni trasu (`Settings.active_route_id`) a UI pro jeji aktivaci/deaktivaci v Route Management.
 8. Implementovat seznam tras vcetne zvyrazneni aktivni trasy.
@@ -464,7 +464,7 @@ Prednost ma existujici service/singleton styl projektu. Novy `RouteService` prid
   - GPX soubor se nemeni - jen metadata v SQLite
 - **Autodetekce pauz:**
   - Pokud je `pause_detection_enabled` zapnuta v Settings, aplikace detekuje dlouhe cekani z GPX dat
-  - Detekuje se: vzdalenost < `pause_max_distance_meters` (default 20m) AND cas skok > `pause_min_duration_seconds` (default 60s)
+  - Detekuje se: setrvani v `pause_radius_meters` (default 20m) po dobu delsi nez `pause_min_duration_seconds` (default 90s)
   - Detektovane pauzy se vypoustejici z vypoctu `duration_seconds` a `distance_meters`
   - Uzivatel muze autodetekci vypnout nebo upravit citlivost v Settings
   - Funguje i pro importovane GPX soubory
