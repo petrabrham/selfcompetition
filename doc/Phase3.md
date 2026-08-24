@@ -62,6 +62,7 @@ Recalculate derived ride metadata before saving the database update when:
 
 - Compare the current recording against rides of the active route.
 - Build a clean elapsed-time timeline from original GPX points and detected pauses.
+- During recording, Ride Statistics ranks the current ride and historical rides by distance reached at the same selected elapsed time; the current ride row is highlighted.
 - Estimate historical position at the current clean elapsed time through interpolation between GPS points.
 - Display current rank, time loss to the leading ride, and time loss to the ride ahead.
 - Render virtual historical riders only for the configured comparison set.

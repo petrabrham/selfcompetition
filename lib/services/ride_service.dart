@@ -93,6 +93,65 @@ class RideService {
     return _liveCleanDuration(ride.positions.sublist(startIndex));
   }
 
+  Duration get currentRecordedDuration {
+    final ride = _currentRide;
+    if (ride == null || ride.positions.length < 2) return Duration.zero;
+    return ride.positions.last.timestamp.difference(ride.positions.first.timestamp);
+  }
+
+  double currentDistanceAtElapsedTime(bool useCleanTime) {
+    final ride = _currentRide;
+    if (ride == null) return 0;
+    final positions = useCleanTime && _cleanStartIndex != null
+        ? ride.positions.sublist(_cleanStartIndex!)
+        : ride.positions;
+    final elapsed = useCleanTime ? currentCleanDuration : currentRecordedDuration;
+    return GpxProcessingService.instance.distanceAtElapsedTime(
+      positions,
+      elapsed: elapsed,
+      useCleanTime: useCleanTime,
+      pauseRadiusMeters: _pauseRadiusMeters,
+      minimumPauseDurationSeconds: _pauseMinDurationSeconds,
+    );
+  }
+
+  Future<double> historicalDistanceAtElapsedTime(
+    Map<String, dynamic> ride,
+    Duration elapsed, {
+    required bool useCleanTime,
+  }) async {
+    final fileName = ride['gpx_file_path'] as String?;
+    if (fileName == null || fileName.isEmpty) return 0;
+    final allPositions = await GpxService.instance.loadRide(fileName);
+    if (allPositions.length < 2) return 0;
+    final startTime = DateTime.tryParse(ride['start_time'] as String? ?? '');
+    final endTime = DateTime.tryParse(ride['end_time'] as String? ?? '');
+    final trimmedPositions = allPositions.where((position) {
+      final afterStart = startTime == null || !position.timestamp.isBefore(startTime);
+      final beforeEnd = endTime == null || !position.timestamp.isAfter(endTime);
+      return afterStart && beforeEnd;
+    }).toList();
+    final positions = trimmedPositions.length >= 2
+        ? trimmedPositions
+        : allPositions;
+    if (kDebugMode && trimmedPositions.length < 2) {
+      debugPrint(
+        'Ride comparison: using full GPX because trimmed timestamps yielded '
+        '${trimmedPositions.length} points for ride ${ride['id']}',
+      );
+    }
+    final settings = await DatabaseService.instance.getSettings();
+    return GpxProcessingService.instance.distanceAtElapsedTime(
+      positions,
+      elapsed: elapsed,
+      useCleanTime: useCleanTime,
+      pauseRadiusMeters:
+          (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0,
+      minimumPauseDurationSeconds:
+          (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90,
+    );
+  }
+
   /// Začni záznam nové jízdy
   Future<void> startRecording({required String userId, int? routeId}) async {
     _lastError = null;
@@ -295,6 +354,7 @@ class RideService {
         'user_nick': _currentRide!.userId ?? 'Unknown',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await recalculateRide(rideId);
 
       if (kDebugMode) {
         debugPrint('Ride saved to DB with ID: $rideId');
@@ -481,23 +541,81 @@ class RideService {
   }
 
   Future<void> recalculateCleanDurations() async {
-    final settings = await DatabaseService.instance.getSettings();
     final rides = await DatabaseService.instance.getAllRides();
     for (final ride in rides) {
-      final fileName = ride['gpx_file_path'] as String?;
-      if (fileName == null || fileName.isEmpty) continue;
       try {
-        final positions = await GpxService.instance.loadRide(fileName);
-        final metrics = _calculateDurationMetrics(positions, settings);
-        await DatabaseService.instance.updateRide(ride['id'] as int, {
-          'recorded_duration_seconds': metrics.recordedDurationSeconds,
-          'clean_duration_seconds': metrics.cleanDurationSeconds,
-          'updated_at': DateTime.now().toIso8601String(),
-        });
+        await recalculateRide(ride['id'] as int);
       } catch (error) {
         if (kDebugMode) debugPrint('Clean duration recalculation failed: $error');
       }
     }
+  }
+
+  Future<void> recalculateRouteRides(int routeId) async {
+    final rides = await DatabaseService.instance.getRidesByRoute(routeId);
+    for (final ride in rides) {
+      await recalculateRide(ride['id'] as int);
+    }
+  }
+
+  Future<void> recalculateRide(int rideId) async {
+    final ride = await DatabaseService.instance.getRide(rideId);
+    final fileName = ride?['gpx_file_path'] as String?;
+    if (ride == null || fileName == null || fileName.isEmpty) return;
+    final settings = await DatabaseService.instance.getSettings();
+    final positions = await GpxService.instance.loadRide(fileName);
+    if (positions.isEmpty) return;
+
+    final routeId = ride['route_id'] as int?;
+    GPSPosition? startBoundary;
+    GPSPosition? endBoundary;
+    if (routeId != null) {
+      final route = await DatabaseService.instance.getRoute(routeId);
+      if (route != null) {
+        startBoundary = _routePoint(route, 'start_lat', 'start_lon');
+        endBoundary = _routePoint(route, 'end_lat', 'end_lon');
+        if (startBoundary == null || endBoundary == null) {
+          final mainRideId = await DatabaseService.instance.getMainRideId(routeId);
+          if (mainRideId != null && mainRideId != rideId) {
+            final mainRide = await DatabaseService.instance.getRide(mainRideId);
+            final mainFileName = mainRide?['gpx_file_path'] as String?;
+            if (mainFileName != null && mainFileName.isNotEmpty) {
+              final mainPositions = await GpxService.instance.loadRide(mainFileName);
+              if (mainPositions.isNotEmpty) {
+                startBoundary ??= mainPositions.first;
+                endBoundary ??= mainPositions.last;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    final processed = GpxProcessingService.instance.processRide(
+      positions,
+      startBoundary: startBoundary,
+      endBoundary: endBoundary,
+      pauseRadiusMeters:
+          (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0,
+      minimumPauseDurationSeconds:
+          (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90,
+    );
+    if (processed.positions.isEmpty) return;
+    final speedDuration = processed.durationMetrics.cleanDurationSeconds > 0
+        ? processed.durationMetrics.cleanDurationSeconds
+        : processed.durationMetrics.recordedDurationSeconds;
+    await DatabaseService.instance.updateRide(rideId, {
+      'start_time': processed.positions.first.timestamp.toIso8601String(),
+      'end_time': processed.positions.last.timestamp.toIso8601String(),
+      'duration_seconds': processed.durationMetrics.recordedDurationSeconds,
+      'recorded_duration_seconds': processed.durationMetrics.recordedDurationSeconds,
+      'clean_duration_seconds': processed.durationMetrics.cleanDurationSeconds,
+      'distance_meters': processed.distanceMeters,
+      'avg_speed_kmh': speedDuration == 0
+          ? 0.0
+          : (processed.distanceMeters / 1000) / (speedDuration / 3600),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
   }
 
   /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.
@@ -548,7 +666,7 @@ class RideService {
         final finalFileName =
             await GpxService.instance.moveImportedFileToGpx(fileName);
 
-        await DatabaseService.instance.insertRide({
+        final rideId = await DatabaseService.instance.insertRide({
           'route_id': null,
           'gpx_file_path': finalFileName,
           'start_time': startTime.toIso8601String(),
@@ -562,6 +680,7 @@ class RideService {
           'user_nick': userNick,
           'created_at': DateTime.now().toIso8601String(),
         });
+        await recalculateRide(rideId);
 
         importedCount++;
       } catch (e) {
@@ -645,6 +764,7 @@ class RideService {
         if (targetRouteId != null && assignedRouteId == null) {
           unassigned.add(ImportedRideRejection(id: rideId, name: file.name));
         }
+        await recalculateRide(rideId);
         importedCount++;
       } catch (e) {
         failed[file.name] = e.toString();

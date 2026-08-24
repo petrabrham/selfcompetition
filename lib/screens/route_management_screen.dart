@@ -232,6 +232,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
         widget.routeId!,
         ride['id'] as int,
       );
+      await RideService.instance.recalculateRouteRides(widget.routeId!);
       _reloadRides();
     } catch (error) {
       if (!mounted) return;
@@ -330,6 +331,12 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
       ride['id'] as int,
       {'route_id': targetRouteId},
     );
+    if (currentRouteId != null) {
+      await RideService.instance.recalculateRouteRides(currentRouteId);
+    }
+    if (targetRouteId != null) {
+      await RideService.instance.recalculateRouteRides(targetRouteId);
+    }
     _reloadRides();
   }
 
@@ -486,7 +493,38 @@ class _RouteFormScreenState extends State<RouteFormScreen> {
   String v(dynamic x) => x?.toString() ?? '';
   @override void dispose() { name.dispose(); description.dispose(); startLat.dispose(); startLon.dispose(); endLat.dispose(); endLon.dispose(); tolerance.dispose(); super.dispose(); }
   double? n(String x) => x.trim().isEmpty ? null : double.tryParse(x.trim());
-  Future<void> save() async { if (!key.currentState!.validate()) return; setState(() => saving = true); final now = DateTime.now().toIso8601String(); final r = <String,dynamic>{'name': name.text.trim(), 'description': description.text.trim().isEmpty ? null : description.text.trim(), 'start_lat': n(startLat.text), 'start_lon': n(startLon.text), 'end_lat': n(endLat.text), 'end_lon': n(endLon.text), 'tolerance_radius': n(tolerance.text) ?? 50.0, 'updated_at': now}; try { if (widget.routeId == null) { r['created_at'] = now; await DatabaseService.instance.insertRoute(r); } else { await DatabaseService.instance.updateRoute(widget.routeId!, r); } if (mounted) Navigator.pop(context); } catch (e) { if (mounted) { setState(() => saving = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'))); } } }
+  Future<void> save() async {
+    if (!key.currentState!.validate()) return;
+    setState(() => saving = true);
+    final now = DateTime.now().toIso8601String();
+    final route = <String, dynamic>{
+      'name': name.text.trim(),
+      'description': description.text.trim().isEmpty ? null : description.text.trim(),
+      'start_lat': n(startLat.text),
+      'start_lon': n(startLon.text),
+      'end_lat': n(endLat.text),
+      'end_lon': n(endLon.text),
+      'tolerance_radius': n(tolerance.text) ?? 50.0,
+      'updated_at': now,
+    };
+    try {
+      if (widget.routeId == null) {
+        route['created_at'] = now;
+        await DatabaseService.instance.insertRoute(route);
+      } else {
+        await DatabaseService.instance.updateRoute(widget.routeId!, route);
+        await RideService.instance.recalculateRouteRides(widget.routeId!);
+      }
+      if (mounted) Navigator.pop(context);
+    } catch (error) {
+      if (mounted) {
+        setState(() => saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $error')),
+        );
+      }
+    }
+  }
   Widget field(TextEditingController c, String label) => TextFormField(controller: c, decoration: InputDecoration(labelText: label), keyboardType: const TextInputType.numberWithOptions(decimal: true), validator: (x) => x != null && x.trim().isNotEmpty && n(x) == null ? 'Enter a number' : null);
 
   Future<void> pickFromMap(TextEditingController latController, TextEditingController lonController, String title, {required bool useLastGpxPosition}) async {

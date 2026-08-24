@@ -447,7 +447,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       if (_isRecording && !_screenDimmed) {
         _setRecordingKeepScreenOn(true);
       }
-      if (!_isRecording) {
+      if (!_isRecording && !GPSService.instance.isReplaying) {
         _startLiveTracking();
       }
     } else if (state == AppLifecycleState.inactive ||
@@ -465,6 +465,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   Future<void> _startLiveTracking() async {
     final settings = await DatabaseService.instance.getSettings();
     if (!mounted && !RideService.instance.isRecording) return;
+    if (GPSService.instance.isReplaying) return;
     await GPSService.instance.startTracking(
       updateIntervalMs: settings?['gps_update_interval_ms'] as int? ?? 5000,
       minDistanceMeters:
