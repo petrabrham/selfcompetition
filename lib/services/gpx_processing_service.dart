@@ -22,6 +22,123 @@ class ProcessedRide {
   });
 }
 
+class ComparisonTimelinePoint {
+  final int pointIndex;
+  final double elapsedCleanSeconds;
+  final double elapsedRecordedSeconds;
+  final double distanceMeters;
+  final GPSPosition position;
+
+  const ComparisonTimelinePoint({
+    required this.pointIndex,
+    required this.elapsedCleanSeconds,
+    required this.elapsedRecordedSeconds,
+    required this.distanceMeters,
+    required this.position,
+  });
+}
+
+class LiveRideMetrics {
+  final Duration recordedDuration;
+  final Duration cleanDuration;
+  final double recordedDistanceMeters;
+  final double cleanDistanceMeters;
+
+  const LiveRideMetrics({
+    required this.recordedDuration,
+    required this.cleanDuration,
+    required this.recordedDistanceMeters,
+    required this.cleanDistanceMeters,
+  });
+}
+
+class LiveRideTimeline {
+  final double pauseRadiusMeters;
+  final int minimumPauseDurationSeconds;
+  final GPSPosition _start;
+  GPSPosition _lastCommitted;
+  final List<GPSPosition> _pauseCandidate = [];
+  Duration _recordedDuration = Duration.zero;
+  Duration _cleanDuration = Duration.zero;
+  double _recordedDistanceMeters = 0;
+  double _cleanDistanceMeters = 0;
+
+  LiveRideTimeline({
+    required GPSPosition start,
+    required this.pauseRadiusMeters,
+    required this.minimumPauseDurationSeconds,
+  })  : _start = start,
+        _lastCommitted = start;
+
+  LiveRideMetrics get metrics => LiveRideMetrics(
+        recordedDuration: _recordedDuration,
+        cleanDuration: _cleanDuration,
+        recordedDistanceMeters: _recordedDistanceMeters,
+        cleanDistanceMeters: _cleanDistanceMeters,
+      );
+
+  void add(GPSPosition position) {
+    _recordedDuration = position.timestamp.difference(_start.timestamp);
+    _recordedDistanceMeters += _distance(_lastCommitted, position);
+
+    if (_pauseCandidate.isEmpty) {
+      _pauseCandidate.add(_lastCommitted);
+    }
+    _pauseCandidate.add(position);
+    final anchor = _pauseCandidate.first;
+
+    if (_distance(anchor, position) <= pauseRadiusMeters) {
+      _lastCommitted = position;
+      return;
+    }
+
+    final candidateDuration = position.timestamp
+        .difference(anchor.timestamp)
+        .inSeconds;
+    final candidateDistance = _distance(anchor, position);
+    final sparsePause = _pauseCandidate.length == 2 &&
+        candidateDuration >= minimumPauseDurationSeconds &&
+        candidateDistance / candidateDuration <= 1 / 3.6;
+    final stationaryPause = _pauseCandidate.length > 2 &&
+        _pauseCandidate[_pauseCandidate.length - 2].timestamp
+                .difference(anchor.timestamp)
+                .inSeconds >=
+            minimumPauseDurationSeconds;
+
+    if (sparsePause || stationaryPause) {
+      _lastCommitted = position;
+      _pauseCandidate
+        ..clear()
+        ..add(position);
+      return;
+    }
+
+    _commitCandidate();
+    _pauseCandidate
+      ..clear()
+      ..add(position);
+    _lastCommitted = position;
+  }
+
+  void _commitCandidate() {
+    for (var index = 1; index < _pauseCandidate.length; index++) {
+      final first = _pauseCandidate[index - 1];
+      final second = _pauseCandidate[index];
+      _cleanDuration += second.timestamp.difference(first.timestamp);
+      _cleanDistanceMeters += _distance(first, second);
+    }
+  }
+
+  double _distance(GPSPosition first, GPSPosition second) {
+    return GPSService.calculateDistance(
+      first.latitude,
+      first.longitude,
+      second.latitude,
+      second.longitude,
+    );
+  }
+}
+
 class GpxProcessingService {
   static final GpxProcessingService instance = GpxProcessingService._();
 
@@ -178,6 +295,57 @@ class GpxProcessingService {
       ),
       distanceMeters: _calculateDistance(trimmed),
     );
+  }
+
+  List<ComparisonTimelinePoint> buildComparisonTimeline(
+    List<GPSPosition> positions, {
+    required double pauseRadiusMeters,
+    required int minimumPauseDurationSeconds,
+  }) {
+    if (positions.isEmpty) return [];
+    final pausedSegments = _pausedSegmentIndices(
+      positions,
+      pauseRadiusMeters: pauseRadiusMeters,
+      minimumPauseDurationSeconds: minimumPauseDurationSeconds,
+    );
+    final timeline = <ComparisonTimelinePoint>[];
+    var cleanSeconds = 0.0;
+    var recordedSeconds = 0.0;
+    var distanceMeters = 0.0;
+    timeline.add(
+      ComparisonTimelinePoint(
+        pointIndex: 0,
+        elapsedCleanSeconds: 0,
+        elapsedRecordedSeconds: 0,
+        distanceMeters: 0,
+        position: positions.first,
+      ),
+    );
+
+    for (var index = 1; index < positions.length; index++) {
+      final first = positions[index - 1];
+      final second = positions[index];
+      final segmentSeconds = second.timestamp
+              .difference(first.timestamp)
+              .inMilliseconds /
+          1000;
+      final segmentDistance = _distanceBetween(first, second);
+      recordedSeconds += segmentSeconds;
+      if (!pausedSegments.contains(index - 1)) {
+        cleanSeconds += segmentSeconds;
+        distanceMeters += segmentDistance;
+      }
+      timeline.add(
+        ComparisonTimelinePoint(
+          pointIndex: index,
+          elapsedCleanSeconds: cleanSeconds,
+          elapsedRecordedSeconds: recordedSeconds,
+          distanceMeters: distanceMeters,
+          position: second,
+        ),
+      );
+    }
+    return timeline;
   }
 
   List<GPSPosition> _trimToBoundaries(

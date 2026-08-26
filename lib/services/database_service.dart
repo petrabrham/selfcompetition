@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
+import 'gpx_processing_service.dart';
 
 /// SQLite Database Service
 /// Manages all database operations for Routes, Rides, and Settings tables
@@ -26,7 +27,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: _createTables,
       onUpgrade: _upgradeDatabase,
     );
@@ -194,6 +195,9 @@ class DatabaseService {
         SET recorded_duration_seconds = COALESCE(recorded_duration_seconds, duration_seconds)
       ''');
     }
+    if (oldVersion < 9) {
+      await _createComparisonTimelineTable(db);
+    }
   }
 
   /// Create all tables
@@ -237,6 +241,7 @@ class DatabaseService {
         FOREIGN KEY (route_id) REFERENCES Routes(id)
       )
     ''');
+    await _createComparisonTimelineTable(db);
 
     // Settings table - stores user preferences
     await db.execute('''
@@ -269,6 +274,32 @@ class DatabaseService {
       'pause_min_duration_seconds': 90,
       'updated_at': DateTime.now().toIso8601String(),
     });
+  }
+
+  Future<void> _createComparisonTimelineTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS ComparisonTimelinePoints(
+        ride_id INTEGER NOT NULL,
+        point_index INTEGER NOT NULL,
+        elapsed_clean_seconds REAL NOT NULL,
+        elapsed_recorded_seconds REAL NOT NULL,
+        distance_meters REAL NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        altitude_meters REAL,
+        speed_mps REAL,
+        PRIMARY KEY (ride_id, point_index),
+        FOREIGN KEY (ride_id) REFERENCES Rides(id)
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS comparison_timeline_clean_time_idx
+      ON ComparisonTimelinePoints(ride_id, elapsed_clean_seconds)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS comparison_timeline_recorded_time_idx
+      ON ComparisonTimelinePoints(ride_id, elapsed_recorded_seconds)
+    ''');
   }
 
   /// ============ ROUTES OPERATIONS ============
@@ -403,10 +434,72 @@ class DatabaseService {
   Future<int> deleteRide(int id) async {
     final db = await database;
     final ride = await getRide(id);
-    final result = await db.delete('Rides', where: 'id = ?', whereArgs: [id]);
+    final result = await db.transaction((transaction) async {
+      await transaction.delete(
+        'ComparisonTimelinePoints',
+        where: 'ride_id = ?',
+        whereArgs: [id],
+      );
+      return transaction.delete('Rides', where: 'id = ?', whereArgs: [id]);
+    });
     final routeId = ride?['route_id'] as int?;
     if (routeId != null) await repairMainRide(routeId);
     return result;
+  }
+
+  Future<void> replaceComparisonTimeline(
+    int rideId,
+    List<ComparisonTimelinePoint> points,
+  ) async {
+    final db = await database;
+    await db.transaction((transaction) async {
+      await transaction.delete(
+        'ComparisonTimelinePoints',
+        where: 'ride_id = ?',
+        whereArgs: [rideId],
+      );
+      final batch = transaction.batch();
+      for (final point in points) {
+        batch.insert('ComparisonTimelinePoints', {
+          'ride_id': rideId,
+          'point_index': point.pointIndex,
+          'elapsed_clean_seconds': point.elapsedCleanSeconds,
+          'elapsed_recorded_seconds': point.elapsedRecordedSeconds,
+          'distance_meters': point.distanceMeters,
+          'latitude': point.position.latitude,
+          'longitude': point.position.longitude,
+          'altitude_meters': point.position.altitude,
+          'speed_mps': point.position.speed,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getRouteDistancesAtElapsedTime(
+    int routeId,
+    double elapsedSeconds, {
+    required bool useCleanTime,
+  }) async {
+    final db = await database;
+    final timeColumn = useCleanTime
+        ? 'elapsed_clean_seconds'
+        : 'elapsed_recorded_seconds';
+    return db.rawQuery('''
+      SELECT timeline.ride_id, timeline.distance_meters, rides.start_time
+      FROM ComparisonTimelinePoints timeline
+      INNER JOIN Rides rides ON rides.id = timeline.ride_id
+      INNER JOIN (
+        SELECT point.ride_id, MAX(point.$timeColumn) AS elapsed
+        FROM ComparisonTimelinePoints point
+        INNER JOIN Rides candidate ON candidate.id = point.ride_id
+        WHERE candidate.route_id = ? AND point.$timeColumn <= ?
+        GROUP BY point.ride_id
+      ) latest ON latest.ride_id = timeline.ride_id
+        AND latest.elapsed = timeline.$timeColumn
+      WHERE rides.route_id = ?
+      ORDER BY timeline.distance_meters DESC
+    ''', [routeId, elapsedSeconds, routeId]);
   }
 
   Future<int?> getMainRideId(int routeId) async {

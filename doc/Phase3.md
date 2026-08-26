@@ -15,6 +15,59 @@ Turn the stored GPX rides into a fair real-time comparison experience. The first
 - `clean_duration_seconds` stores the duration after trimming and pause detection.
 - `Settings.show_clean_duration` controls whether statistics and future real-time UI prefer clean duration or recorded duration, with a safe fallback to recorded duration when clean data is unavailable.
 
+### Materialized Comparison Timeline
+
+GPX remains the immutable source of truth, but it must not be reparsed or scanned on every live refresh. Each route ride therefore gets a derived, local relational timeline rebuilt when its GPX, route boundaries, main ride, or pause settings change.
+
+```text
+ComparisonTimelinePoints
+   ride_id                    INTEGER NOT NULL
+   elapsed_clean_seconds      REAL NOT NULL
+   elapsed_recorded_seconds   REAL NOT NULL
+   distance_meters            REAL NOT NULL
+   latitude                   REAL NOT NULL
+   longitude                  REAL NOT NULL
+   altitude_meters            REAL
+   speed_mps                  REAL
+   PRIMARY KEY (ride_id, elapsed_clean_seconds)
+```
+
+- A timeline point represents a GPX position on the processed ride timeline.
+- Detected pause intervals advance recorded time but do not advance clean time or distance.
+- The current live ride maintains the same timeline incrementally as each GPS point arrives; it does not rescan prior points every second.
+- At `STOP`, the completed ride is processed again from the complete GPX file as the authoritative persisted result.
+- Historical rides are materialized once into SQLite and queried by elapsed time or distance during live comparison.
+- The derived timeline is disposable and rebuilt from the original GPX whenever the source or processing parameters change.
+
+### Required Comparison Queries
+
+At live elapsed time `T`:
+
+```text
+distanceAtTime(ride, T)
+positionAtTime(ride, T)
+```
+
+For ranking at `T`:
+
+```text
+SELECT ride_id, distance_meters
+FROM ComparisonTimelinePoints
+WHERE elapsed_clean_seconds <= T
+GROUP BY ride_id
+ORDER BY distance_meters DESC
+```
+
+For a distance checkpoint `D`:
+
+```text
+SELECT ride_id, MIN(elapsed_clean_seconds)
+FROM ComparisonTimelinePoints
+WHERE distance_meters >= D
+GROUP BY ride_id
+ORDER BY MIN(elapsed_clean_seconds) ASC
+```
+
 ### Processing Rules
 
 1. Load the original GPX positions for a ride.
@@ -47,6 +100,7 @@ Recalculate derived ride metadata before saving the database update when:
 - route start or end changes;
 - tolerance or pause-detection settings change;
 - the route main ride changes when implicit boundaries are in use.
+- settings change between clean and recorded timeline mode.
 
 ### Acceptance Criteria
 

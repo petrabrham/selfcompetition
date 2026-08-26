@@ -242,6 +242,34 @@ SELECT show_clean_duration, pause_radius_meters, pause_min_duration_seconds FROM
 
 ---
 
+## Verze 9 (Phase 3 - materializovaná časová osa)
+
+Aplikace: `version: 9` v `openDatabase()`
+
+### Tabulka `ComparisonTimelinePoints`
+
+Odvozená data pro rychlé realtime porovnání jízd. Zdroj pravdy zůstává GPX soubor; řádky této tabulky lze kdykoli znovu vytvořit.
+
+```sql
+CREATE TABLE ComparisonTimelinePoints(
+  ride_id INTEGER NOT NULL,
+  point_index INTEGER NOT NULL,
+  elapsed_clean_seconds REAL NOT NULL,
+  elapsed_recorded_seconds REAL NOT NULL,
+  distance_meters REAL NOT NULL,
+  latitude REAL NOT NULL,
+  longitude REAL NOT NULL,
+  altitude_meters REAL,
+  speed_mps REAL,
+  PRIMARY KEY (ride_id, point_index),
+  FOREIGN KEY (ride_id) REFERENCES Rides(id)
+)
+```
+
+Indexy `ride_id, elapsed_clean_seconds` a `ride_id, elapsed_recorded_seconds` podporují rychlý dotaz na vzdálenost historické jízdy při aktuálním čase. Body se obnovují při přepočtu jízdy, tedy také po úpravě hranic trasy nebo parametrů detekce pauz. Po migraci se aktivní trasa materializuje při prvním otevření živého porovnání.
+
+---
+
 ## Budoucí verze
 
 Tato dokumentace se rozšíří při přidávání nových verzí. Postupuj podle schématu výše.

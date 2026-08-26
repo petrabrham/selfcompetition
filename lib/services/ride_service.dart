@@ -65,6 +65,7 @@ class RideService {
   GPSPosition? _cleanStartPoint;
   double? _cleanStartRadiusMeters;
   int? _cleanStartIndex;
+  LiveRideTimeline? _liveTimeline;
   double _pauseRadiusMeters = 20.0;
   int _pauseMinDurationSeconds = 90;
 
@@ -85,34 +86,19 @@ class RideService {
   bool get hasCleanRideStarted => _cleanStartIndex != null;
 
   Duration get currentCleanDuration {
-    final ride = _currentRide;
-    final startIndex = _cleanStartIndex;
-    if (ride == null || startIndex == null || startIndex >= ride.positions.length) {
-      return Duration.zero;
-    }
-    return _liveCleanDuration(ride.positions.sublist(startIndex));
+    return _liveTimeline?.metrics.cleanDuration ?? Duration.zero;
   }
 
   Duration get currentRecordedDuration {
-    final ride = _currentRide;
-    if (ride == null || ride.positions.length < 2) return Duration.zero;
-    return ride.positions.last.timestamp.difference(ride.positions.first.timestamp);
+    return _liveTimeline?.metrics.recordedDuration ?? Duration.zero;
   }
 
   double currentDistanceAtElapsedTime(bool useCleanTime) {
-    final ride = _currentRide;
-    if (ride == null) return 0;
-    final positions = useCleanTime && _cleanStartIndex != null
-        ? ride.positions.sublist(_cleanStartIndex!)
-        : ride.positions;
-    final elapsed = useCleanTime ? currentCleanDuration : currentRecordedDuration;
-    return GpxProcessingService.instance.distanceAtElapsedTime(
-      positions,
-      elapsed: elapsed,
-      useCleanTime: useCleanTime,
-      pauseRadiusMeters: _pauseRadiusMeters,
-      minimumPauseDurationSeconds: _pauseMinDurationSeconds,
-    );
+    final metrics = _liveTimeline?.metrics;
+    if (metrics == null) return 0;
+    return useCleanTime
+        ? metrics.cleanDistanceMeters
+        : metrics.recordedDistanceMeters;
   }
 
   Future<double> historicalDistanceAtElapsedTime(
@@ -172,6 +158,7 @@ class RideService {
     _cleanStartIndex = null;
     _cleanStartPoint = null;
     _cleanStartRadiusMeters = null;
+    _liveTimeline = null;
     final settings = await DatabaseService.instance.getSettings();
     _pauseRadiusMeters =
       (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0;
@@ -204,7 +191,10 @@ class RideService {
   void _onPositionUpdate(GPSPosition position) {
     if (_isRecording && !_isPaused && _currentRide != null) {
       _currentRide!.addPosition(position);
-      _checkCleanStart(position);
+      final cleanStartedNow = _checkCleanStart(position);
+      if (!cleanStartedNow) {
+        _liveTimeline?.add(position);
+      }
       if (kDebugMode) {
         debugPrint(
           'Ride point #${_currentRide!.positions.length}: '
@@ -218,15 +208,9 @@ class RideService {
   }
 
   Future<void> _configureCleanStart(int? routeId) async {
-    if (routeId == null) {
-      _cleanStartIndex = 0;
-      return;
-    }
+    if (routeId == null) return;
     final route = await DatabaseService.instance.getRoute(routeId);
-    if (route == null) {
-      _cleanStartIndex = 0;
-      return;
-    }
+    if (route == null) return;
     _cleanStartPoint = _routePoint(route, 'start_lat', 'start_lon');
     _cleanStartRadiusMeters = ((route['tolerance_radius'] as num?)?.toDouble() ?? 50) / 2;
 
@@ -246,13 +230,14 @@ class RideService {
     }
   }
 
-  void _checkCleanStart(GPSPosition position) {
-    if (_cleanStartIndex != null || _currentRide == null) return;
+  bool _checkCleanStart(GPSPosition position) {
+    if (_cleanStartIndex != null || _currentRide == null) return false;
     final startPoint = _cleanStartPoint;
     final radius = _cleanStartRadiusMeters;
     if (startPoint == null || radius == null) {
       _cleanStartIndex = 0;
-      return;
+      _startLiveTimeline(position);
+      return true;
     }
     if (GPSService.calculateDistance(
           position.latitude,
@@ -261,25 +246,18 @@ class RideService {
           startPoint.longitude,
         ) <= radius) {
       _cleanStartIndex = _currentRide!.positions.length - 1;
+      _startLiveTimeline(position);
       if (kDebugMode) debugPrint('Ride: Clean timer started at route start');
     }
+    return _liveTimeline != null;
   }
 
-  Duration _liveCleanDuration(List<GPSPosition> positions) {
-    final metrics = GpxProcessingService.instance.calculateDurations(
-      positions,
+  void _startLiveTimeline(GPSPosition position) {
+    _liveTimeline = LiveRideTimeline(
+      start: position,
       pauseRadiusMeters: _pauseRadiusMeters,
       minimumPauseDurationSeconds: _pauseMinDurationSeconds,
     );
-    if (positions.isEmpty) return Duration.zero;
-    final secondsSinceLastPoint = DateTime.now()
-        .difference(positions.last.timestamp)
-        .inSeconds;
-    final tailSeconds = (secondsSinceLastPoint >= _pauseMinDurationSeconds
-        ? 0
-      : secondsSinceLastPoint.clamp(0, _pauseMinDurationSeconds))
-      .toInt();
-    return Duration(seconds: metrics.cleanDurationSeconds + tailSeconds);
   }
 
   /// Zastav záznam a ulož jízdu do DB
@@ -601,6 +579,13 @@ class RideService {
           (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90,
     );
     if (processed.positions.isEmpty) return;
+    final timeline = GpxProcessingService.instance.buildComparisonTimeline(
+      processed.positions,
+      pauseRadiusMeters:
+        (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0,
+      minimumPauseDurationSeconds:
+        (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90,
+    );
     final speedDuration = processed.durationMetrics.cleanDurationSeconds > 0
         ? processed.durationMetrics.cleanDurationSeconds
         : processed.durationMetrics.recordedDurationSeconds;
@@ -616,6 +601,7 @@ class RideService {
           : (processed.distanceMeters / 1000) / (speedDuration / 3600),
       'updated_at': DateTime.now().toIso8601String(),
     });
+    await DatabaseService.instance.replaceComparisonTimeline(rideId, timeline);
   }
 
   /// Import GPX souborů z adresáře gpx_import/ jako nezařazené jízdy.

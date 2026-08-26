@@ -2,9 +2,6 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../services/database_service.dart';
 import '../services/ride_service.dart';
-import '../services/gpx_service.dart';
-import '../services/gpx_processing_service.dart';
-import '../services/gps_service.dart';
 
 // Screens - Ride Statistics screen
 class RideStatisticsScreen extends StatefulWidget {
@@ -19,9 +16,11 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
   Future<_StatisticsData>? _staticStatisticsFuture;
   int? _cachedRouteId;
   bool? _cachedUseCleanTime;
-  List<_CachedHistoricalRide> _cachedHistoricalRides = [];
   _StatisticsData? _liveBaseStatistics;
   bool _isLoadingLiveCache = false;
+  bool _isRefreshingLiveComparison = false;
+  List<_ComparisonRow>? _liveRows;
+  Duration? _liveElapsed;
 
   @override
   void initState() {
@@ -29,7 +28,7 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
     _liveRefreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || !RideService.instance.isRecording) return;
       _ensureLiveCache();
-      setState(() {});
+      _refreshLiveComparison();
     });
   }
 
@@ -79,13 +78,14 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
         (a, b) => _durationOf(a, showCleanDuration)
             .compareTo(_durationOf(b, showCleanDuration)),
       );
-      await _loadLiveCache(rides, showCleanDuration);
+      await _materializeRouteTimeline(routeId);
       if (!mounted) return;
       setState(() {
         _cachedRouteId = routeId;
         _cachedUseCleanTime = showCleanDuration;
         _liveBaseStatistics = _StatisticsData(rides, showCleanDuration);
       });
+      await _refreshLiveComparison();
     } finally {
       _isLoadingLiveCache = false;
     }
@@ -98,71 +98,57 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
     final elapsed = showCleanDuration
         ? RideService.instance.currentCleanDuration
         : RideService.instance.currentRecordedDuration;
-    final historicalRows = _cachedHistoricalRides.map((ride) {
-      final distance = GpxProcessingService.instance.distanceAtElapsedTime(
-        ride.positions,
-        elapsed: elapsed,
-        useCleanTime: showCleanDuration,
-        pauseRadiusMeters: ride.pauseRadiusMeters,
-        minimumPauseDurationSeconds: ride.pauseMinDurationSeconds,
-      );
-      return _ComparisonRow(
-        label: ride.label,
-        distanceMeters: distance,
-        isCurrentRide: false,
-        averageSpeedKmh: ride.averageSpeedKmh,
-      );
-    }).toList();
-    historicalRows.add(
-      _ComparisonRow(
-        label: 'Current ride',
-        distanceMeters: RideService.instance.currentDistanceAtElapsedTime(showCleanDuration),
-        isCurrentRide: true,
-        averageSpeedKmh: 0,
-      ),
-    );
-    historicalRows.sort((a, b) => b.distanceMeters.compareTo(a.distanceMeters));
     return _StatisticsData(
       base.rides,
       showCleanDuration,
-      liveRows: historicalRows,
-      liveElapsed: elapsed,
+      liveRows: _liveRows ?? const [],
+      liveElapsed: _liveElapsed ?? elapsed,
     );
   }
 
-  Future<void> _loadLiveCache(
-    List<Map<String, dynamic>> rides,
-    bool useCleanTime,
-  ) async {
-    final settings = await DatabaseService.instance.getSettings();
-    final pauseRadius =
-        (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0;
-    final pauseDuration =
-        (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90;
-    final cached = <_CachedHistoricalRide>[];
-    for (final ride in rides) {
-      final fileName = ride['gpx_file_path'] as String?;
-      if (fileName == null || fileName.isEmpty) continue;
-      final positions = await GpxService.instance.loadRide(fileName);
-      if (positions.length < 2) continue;
-      final startTime = DateTime.tryParse(ride['start_time'] as String? ?? '');
-      final endTime = DateTime.tryParse(ride['end_time'] as String? ?? '');
-      final trimmed = positions.where((position) {
-        final afterStart = startTime == null || !position.timestamp.isBefore(startTime);
-        final beforeEnd = endTime == null || !position.timestamp.isAfter(endTime);
-        return afterStart && beforeEnd;
-      }).toList();
-      cached.add(
-        _CachedHistoricalRide(
-          label: _formatDate(ride['start_time'] as String?),
-          positions: trimmed.length >= 2 ? trimmed : positions,
-          averageSpeedKmh: _averageSpeed(ride),
-          pauseRadiusMeters: pauseRadius,
-          pauseMinDurationSeconds: pauseDuration,
-        ),
+  Future<void> _materializeRouteTimeline(int routeId) async {
+    await RideService.instance.recalculateRouteRides(routeId);
+  }
+
+  Future<void> _refreshLiveComparison() async {
+    if (_isRefreshingLiveComparison) return;
+    final base = _liveBaseStatistics;
+    final routeId = _cachedRouteId;
+    if (!mounted || base == null || routeId == null) return;
+    _isRefreshingLiveComparison = true;
+    try {
+      final elapsed = base.showCleanDuration
+          ? RideService.instance.currentCleanDuration
+          : RideService.instance.currentRecordedDuration;
+      final distances =
+          await DatabaseService.instance.getRouteDistancesAtElapsedTime(
+        routeId,
+        elapsed.inMilliseconds / 1000,
+        useCleanTime: base.showCleanDuration,
       );
+      final rows = distances.map((row) => _ComparisonRow(
+            label: _formatDate(row['start_time'] as String?),
+            distanceMeters: (row['distance_meters'] as num).toDouble(),
+            isCurrentRide: false,
+            averageSpeedKmh: 0,
+          )).toList();
+      rows.add(_ComparisonRow(
+        label: 'Current ride',
+        distanceMeters:
+            RideService.instance.currentDistanceAtElapsedTime(base.showCleanDuration),
+        isCurrentRide: true,
+        averageSpeedKmh: 0,
+      ));
+      rows.sort((a, b) => b.distanceMeters.compareTo(a.distanceMeters));
+      if (mounted) {
+        setState(() {
+          _liveRows = rows;
+          _liveElapsed = elapsed;
+        });
+      }
+    } finally {
+      _isRefreshingLiveComparison = false;
     }
-    _cachedHistoricalRides = cached;
   }
 
   @override
@@ -180,6 +166,8 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
     _liveBaseStatistics = null;
     _cachedRouteId = null;
     _cachedUseCleanTime = null;
+    _liveRows = null;
+    _liveElapsed = null;
     _staticStatisticsFuture ??= _loadStatistics();
     return FutureBuilder<_StatisticsData>(
       future: _staticStatisticsFuture,
@@ -327,21 +315,6 @@ class _StatisticsData {
   });
 }
 
-class _CachedHistoricalRide {
-  final String label;
-  final List<GPSPosition> positions;
-  final double averageSpeedKmh;
-  final double pauseRadiusMeters;
-  final int pauseMinDurationSeconds;
-
-  const _CachedHistoricalRide({
-    required this.label,
-    required this.positions,
-    required this.averageSpeedKmh,
-    required this.pauseRadiusMeters,
-    required this.pauseMinDurationSeconds,
-  });
-}
 
 class _ComparisonRow {
   final String label;
