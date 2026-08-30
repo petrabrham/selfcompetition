@@ -207,7 +207,9 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
-            DataTable(
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
               horizontalMargin: 4,
               columnSpacing: 4,
               headingRowHeight: 32,
@@ -262,6 +264,7 @@ class _RideStatisticsScreenState extends State<RideStatisticsScreen> {
                           ],
                         );
                       }).toList(),
+              ),
             ),
           ],
         );
