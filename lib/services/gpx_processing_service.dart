@@ -262,10 +262,14 @@ class GpxProcessingService {
             positions[nextIndex],
             minimumPauseDurationSeconds,
           );
-      if (stationarySeconds >= minimumPauseDurationSeconds || sparseGap) {
-        for (var segment = anchorIndex; segment < nextIndex; segment++) {
+      if (stationarySeconds >= minimumPauseDurationSeconds) {
+        // Exclude the exit segment (lastStationaryIndex -> nextIndex); it is moving time.
+        for (var segment = anchorIndex; segment < lastStationaryIndex; segment++) {
           paused.add(segment);
         }
+        anchorIndex = nextIndex;
+      } else if (sparseGap) {
+        paused.add(anchorIndex);
         anchorIndex = nextIndex;
       } else {
         anchorIndex++;

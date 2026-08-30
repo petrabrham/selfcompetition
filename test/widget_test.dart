@@ -8,9 +8,9 @@ void main() {
   test('calculates recorded and clean duration around a pause', () {
     final positions = _positions([
       (0, 0, 0),
-      (10, 0, 10),
-      (10, 0, 130),
-      (20, 0, 140),
+      (200, 0, 20),
+      (205, 0, 140),
+      (400, 0, 160),
     ]);
 
     final metrics = processor.calculateDurations(
@@ -19,16 +19,16 @@ void main() {
       minimumPauseDurationSeconds: 60,
     );
 
-    expect(metrics.recordedDurationSeconds, 140);
-    expect(metrics.cleanDurationSeconds, 20);
+    expect(metrics.recordedDurationSeconds, 160);
+    expect(metrics.cleanDurationSeconds, 40);
   });
 
   test('materialized timeline preserves recorded time during a pause', () {
     final positions = _positions([
       (0, 0, 0),
-      (10, 0, 10),
-      (10, 0, 130),
-      (20, 0, 140),
+      (200, 0, 20),
+      (205, 0, 140),
+      (400, 0, 160),
     ]);
 
     final timeline = processor.buildComparisonTimeline(
@@ -38,8 +38,8 @@ void main() {
     );
 
     expect(timeline, hasLength(4));
-    expect(timeline.last.elapsedRecordedSeconds, 140);
-    expect(timeline.last.elapsedCleanSeconds, 20);
+    expect(timeline.last.elapsedRecordedSeconds, 160);
+    expect(timeline.last.elapsedCleanSeconds, 40);
     expect(timeline.last.distanceMeters, greaterThan(0));
   });
 

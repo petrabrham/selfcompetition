@@ -79,13 +79,9 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
   }
 
   Future<void> _importGpxFiles(BuildContext context) async {
-    FilePickerResult? selection;
+    List<PlatformFile> selection;
     try {
-      selection = await FilePicker.platform.pickFiles(
-        allowMultiple: true,
-        type: FileType.any,
-        withData: true,
-      );
+      selection = await FilePicker.pickFiles(type: FileType.any);
     } on Exception catch (error) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -93,14 +89,17 @@ class _RouteManagementScreenState extends State<RouteManagementScreen> {
       );
       return;
     }
-    if (selection == null || selection.files.isEmpty || !context.mounted) return;
+    if (selection.isEmpty || !context.mounted) return;
 
-    final files = selection.files
+    final gpxSelection = selection
         .where((file) => file.name.toLowerCase().endsWith('.gpx'))
-        .where((file) => file.bytes != null)
-        .map((file) => ImportedGpxFile(name: file.name, bytes: file.bytes!))
         .toList();
+    final files = <ImportedGpxFile>[];
+    for (final file in gpxSelection) {
+      files.add(ImportedGpxFile(name: file.name, bytes: await file.readAsBytes()));
+    }
     if (files.isEmpty) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Select at least one .gpx file.')),
       );
