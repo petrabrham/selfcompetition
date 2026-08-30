@@ -60,6 +60,8 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   String _userNick = 'User1';
   int _screenOffTimeoutSeconds = 30;
   bool _settingsLoaded = false;
+  final GlobalKey _bottomPanelKey = GlobalKey();
+  double _bottomPanelHeight = 0;
   bool _showCleanDuration = true;
   int _comparisonRideLimit = 3;
   bool _isLoadingComparisonPositions = false;
@@ -182,6 +184,18 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       }
     }
     return closestIndex;
+  }
+
+  void _scheduleBottomPanelMeasurement() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box =
+          _bottomPanelKey.currentContext?.findRenderObject() as RenderBox?;
+      final height = box?.size.height ?? 0;
+      if (height != _bottomPanelHeight) {
+        setState(() => _bottomPanelHeight = height);
+      }
+    });
   }
 
   void _restoreRecordingState() {
@@ -731,6 +745,11 @@ class _LiveMapScreenState extends State<LiveMapScreen>
           urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.selfcompetition',
         ),
+        const RichAttributionWidget(
+          attributions: [
+            TextSourceAttribution('OpenStreetMap contributors'),
+          ],
+        ),
         if (_bestRouteTrack.length >= 2)
           PolylineLayer(
             polylines: [
@@ -846,12 +865,20 @@ class _LiveMapScreenState extends State<LiveMapScreen>
 
   @override
   Widget build(BuildContext context) {
+    _scheduleBottomPanelMeasurement();
     final mapContent = GestureDetector(
       behavior: HitTestBehavior.translucent,
       child: Stack(
         fit: StackFit.expand,
         children: [
-        _buildMapLayer(),
+        // Ends above the bottom panel so the map's own attribution popup is not hidden.
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: _bottomPanelHeight,
+          child: _buildMapLayer(),
+        ),
 
         if (_isLoading)
           const Positioned(
@@ -981,6 +1008,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
           left: 0,
           right: 0,
           child: Container(
+            key: _bottomPanelKey,
             decoration: BoxDecoration(
               color: Colors.white,
               border: Border(

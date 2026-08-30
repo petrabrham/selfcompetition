@@ -53,23 +53,35 @@ class _MapPositionPickerScreenState extends State<MapPositionPickerScreen> {
       ),
       body: Stack(
         children: [
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: _center,
-              initialZoom: 17,
-              maxZoom: 19,
-              onMapReady: () => setState(() => _mapReady = true),
-              onPositionChanged: (camera, hasGesture) {
-                setState(() => _center = camera.center);
-              },
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.selfcompetition',
+          // Ends above the coordinates card so the map's own attribution popup is not hidden.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 80,
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _center,
+                initialZoom: 17,
+                maxZoom: 19,
+                onMapReady: () => setState(() => _mapReady = true),
+                onPositionChanged: (camera, hasGesture) {
+                  setState(() => _center = camera.center);
+                },
               ),
-            ],
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.selfcompetition',
+                ),
+                const RichAttributionWidget(
+                  attributions: [
+                    TextSourceAttribution('OpenStreetMap contributors'),
+                  ],
+                ),
+              ],
+            ),
           ),
           const IgnorePointer(
             child: Center(
