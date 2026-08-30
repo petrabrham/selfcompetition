@@ -502,6 +502,36 @@ class DatabaseService {
     ''', [routeId, elapsedSeconds, routeId]);
   }
 
+  Future<List<Map<String, dynamic>>> getRidePositionsNearestElapsedTime(
+    int routeId,
+    double elapsedSeconds, {
+    required bool useCleanTime,
+    int? limit,
+  }) async {
+    final db = await database;
+    final timeColumn = useCleanTime
+        ? 'elapsed_clean_seconds'
+        : 'elapsed_recorded_seconds';
+    final effectiveLimit = limit?.clamp(1, 100).toInt();
+    final limitClause = effectiveLimit == null ? '' : 'LIMIT $effectiveLimit';
+    return db.rawQuery('''
+      SELECT timeline.ride_id, timeline.latitude, timeline.longitude,
+             timeline.altitude_meters, timeline.speed_mps, rides.start_time
+      FROM ComparisonTimelinePoints timeline
+      INNER JOIN Rides rides ON rides.id = timeline.ride_id
+      WHERE rides.route_id = ?
+        AND timeline.point_index = (
+          SELECT candidate.point_index
+          FROM ComparisonTimelinePoints candidate
+          WHERE candidate.ride_id = timeline.ride_id
+          ORDER BY ABS(candidate.$timeColumn - ?) ASC, candidate.point_index ASC
+          LIMIT 1
+        )
+      ORDER BY rides.start_time DESC
+      $limitClause
+    ''', [routeId, elapsedSeconds]);
+  }
+
   Future<int?> getMainRideId(int routeId) async {
     final route = await getRoute(routeId);
     return route?['main_ride_id'] as int?;

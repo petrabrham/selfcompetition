@@ -60,6 +60,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   String _userNick = 'User1';
   int _screenOffTimeoutSeconds = 30;
   bool _settingsLoaded = false;
+  bool _showCleanDuration = true;
+  int _comparisonRideLimit = 3;
+  bool _isLoadingComparisonPositions = false;
+  List<LatLng> _historicalRidePositions = [];
 
   @override
   void initState() {
@@ -95,6 +99,13 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   Future<void> _loadActiveRoute() async {
     final routeId = await DatabaseService.instance.getActiveRouteId();
     final route = routeId == null ? null : await DatabaseService.instance.getRoute(routeId);
+    if (routeId != null) {
+      try {
+        await RideService.instance.recalculateRouteRides(routeId);
+      } catch (error) {
+        if (kDebugMode) debugPrint('Comparison timeline rebuild failed: $error');
+      }
+    }
     final bestTrack = route == null ? <LatLng>[] : await _loadBestRouteTrack(route);
     if (!mounted) return;
     setState(() {
@@ -103,6 +114,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       _activeRoute = route;
       _bestRouteTrack = bestTrack;
     });
+    _refreshHistoricalRidePositions();
   }
 
   Future<List<LatLng>> _loadBestRouteTrack(Map<String, dynamic> route) async {
@@ -188,6 +200,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
         setState(() {
           _recordingDuration += const Duration(seconds: 1);
         });
+        _refreshHistoricalRidePositions();
       }
     });
 
@@ -203,6 +216,10 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       setState(() {
         _userNick = settings?['user_nick'] ?? 'User1';
         _screenOffTimeoutSeconds = settings?['screen_off_timeout_seconds'] ?? 30;
+        _showCleanDuration =
+            (settings?['show_clean_duration'] as num?)?.toInt() != 0;
+        _comparisonRideLimit =
+            (settings?['num_rides_to_display'] as num?)?.toInt() ?? 3;
         _settingsLoaded = true;
       });
       if (kDebugMode) {
@@ -218,6 +235,39 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     }
     
     _loadCurrentPosition();
+  }
+
+  void _refreshHistoricalRidePositions() {
+    if (!_isRecording || _activeRouteId == null) return;
+    unawaited(_loadHistoricalRidePositions());
+  }
+
+  Future<void> _loadHistoricalRidePositions() async {
+    if (_isLoadingComparisonPositions || _activeRouteId == null) return;
+    _isLoadingComparisonPositions = true;
+    try {
+      final elapsed = _showCleanDuration
+          ? RideService.instance.currentCleanDuration
+          : RideService.instance.currentRecordedDuration;
+      final rows =
+          await DatabaseService.instance.getRidePositionsNearestElapsedTime(
+        _activeRouteId!,
+        elapsed.inMilliseconds / 1000,
+        useCleanTime: _showCleanDuration,
+        limit: _comparisonRideLimit,
+      );
+      if (!mounted) return;
+      setState(() {
+        _historicalRidePositions = rows
+            .map((row) => LatLng(
+                  (row['latitude'] as num).toDouble(),
+                  (row['longitude'] as num).toDouble(),
+                ))
+            .toList();
+      });
+    } finally {
+      _isLoadingComparisonPositions = false;
+    }
   }
 
   /// Setup GPS position listener for real-time tracking
@@ -530,6 +580,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       _isPaused = false;
       _recordingDuration = Duration.zero;
     });
+    _refreshHistoricalRidePositions();
     _scheduleScreenSleep();
     
     // Spusť timer pro aktualizaci doby trvání
@@ -538,6 +589,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
         setState(() {
           _recordingDuration = _recordingDuration + Duration(seconds: 1);
         });
+        _refreshHistoricalRidePositions();
       }
     });
     
@@ -575,6 +627,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     setState(() {
       _isRecording = false;
       _isPaused = false;
+      _historicalRidePositions = [];
     });
 
     if (mounted) {
@@ -712,6 +765,37 @@ class _LiveMapScreenState extends State<LiveMapScreen>
             ],
           ),
         if (_activeRoute != null) _buildRouteToleranceCircles(_activeRoute!),
+        if (_isRecording && _historicalRidePositions.isNotEmpty)
+          MarkerLayer(
+            markers: _historicalRidePositions
+                .asMap()
+                .entries
+                .map(
+                  (entry) => Marker(
+                    point: entry.value,
+                    width: 34,
+                    height: 34,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.orange,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${entry.key + 1}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
         if (_currentPosition != null)
           MarkerLayer(
             markers: [
