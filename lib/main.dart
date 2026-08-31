@@ -140,7 +140,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             // Header placeholder - currently unused, reserved for state info
             Container(
               color: Colors.white,
-              height: 48,
+              height: 32,
             ),
             Expanded(
               child: GestureDetector(

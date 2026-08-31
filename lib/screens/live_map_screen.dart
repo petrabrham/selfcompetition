@@ -16,11 +16,13 @@ enum _MapOrientationMode { free, northUp }
 class LiveMapScreen extends StatefulWidget {
   final VoidCallback? onSleepRequested;
   final String? selectedRideFileName;
+  final int? replayRideId;
 
   const LiveMapScreen({
     super.key,
     this.onSleepRequested,
     this.selectedRideFileName,
+    this.replayRideId,
   });
 
   @override
@@ -47,13 +49,13 @@ class _LiveMapScreenState extends State<LiveMapScreen>
   _MapOrientationMode _orientationMode = _MapOrientationMode.northUp;
   bool _isRecording = false;
   bool _isPaused = false;
+  bool _isReplayingRide = false;
   bool _screenDimmed = false;
   int? _activeRouteId;
   String _activeRouteName = 'No active route';
   Map<String, dynamic>? _activeRoute;
   List<LatLng> _bestRouteTrack = [];
     List<LatLng> _selectedRideTrack = [];
-  String? _replayFileName;
   Duration _recordingDuration = Duration.zero;
   late Timer _timerTick;
   Timer? _screenSleepTimer;
@@ -117,6 +119,9 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       _bestRouteTrack = bestTrack;
     });
     _refreshHistoricalRidePositions();
+    if (widget.replayRideId != null && !_isReplayingRide) {
+      await _startReplayForRide(widget.replayRideId!);
+    }
   }
 
   Future<List<LatLng>> _loadBestRouteTrack(Map<String, dynamic> route) async {
@@ -251,13 +256,26 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     _loadCurrentPosition();
   }
 
+  /// Route to compare live progress against: the active route while
+  /// recording, or the replay's comparison route (possibly none) while
+  /// replaying a saved ride. Null when neither is active.
+  int? get _comparisonRouteId {
+    if (_isRecording) return _activeRouteId;
+    if (_isReplayingRide) return RideService.instance.replayComparisonRouteId;
+    return null;
+  }
+
+  /// Whether clean-time stats and other rides' positions should be shown.
+  bool get _showLiveStats => _isRecording || _comparisonRouteId != null;
+
   void _refreshHistoricalRidePositions() {
-    if (!_isRecording || _activeRouteId == null) return;
+    if (!(_isRecording || _isReplayingRide) || _comparisonRouteId == null) return;
     unawaited(_loadHistoricalRidePositions());
   }
 
   Future<void> _loadHistoricalRidePositions() async {
-    if (_isLoadingComparisonPositions || _activeRouteId == null) return;
+    final routeId = _comparisonRouteId;
+    if (_isLoadingComparisonPositions || routeId == null) return;
     _isLoadingComparisonPositions = true;
     try {
       final elapsed = _showCleanDuration
@@ -265,7 +283,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
           : RideService.instance.currentRecordedDuration;
       final rows =
           await DatabaseService.instance.getRidePositionsNearestElapsedTime(
-        _activeRouteId!,
+        routeId,
         elapsed.inMilliseconds / 1000,
         useCleanTime: _showCleanDuration,
         limit: _comparisonRideLimit,
@@ -415,53 +433,69 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     _dimScreen();
   }
 
-  Future<void> _selectReplayRide() async {
-    final replayableFiles = await GpxService.instance.listTestRides();
-    if (!mounted) return;
-
-    final fileName = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Replay saved ride'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: replayableFiles.isEmpty
-              ? const Text('No GPX files found in gpx_test.')
-              : ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: replayableFiles.length,
-                  itemBuilder: (_, index) {
-                    final fileName = replayableFiles[index];
-                    return ListTile(
-                      title: Text(fileName),
-                      onTap: () => Navigator.pop(context, fileName),
-                    );
-                  },
-                ),
-        ),
-      ),
+  Future<void> _startReplayForRide(int rideId) async {
+    final ride = await DatabaseService.instance.getRide(rideId);
+    if (ride == null || !mounted) return;
+    final started = await RideService.instance.startRideReplay(
+      ride,
+      activeRouteId: _activeRouteId,
     );
-    if (fileName == null || !mounted) return;
-
-    try {
-      final positions = await GpxService.instance.loadTestRide(fileName);
-      final started = await GPSService.instance.startReplay(positions);
-      if (!started) throw StateError('The GPX file contains no GPS points.');
-      setState(() => _replayFileName = fileName);
-    } catch (error) {
+    if (!started) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not start replay: $error')),
+        SnackBar(
+          content: Text(
+            'Could not start replay: ${RideService.instance.lastError}',
+          ),
+        ),
       );
+      return;
     }
+
+    final fileName = ride['gpx_file_path'] as String?;
+    if (fileName != null && fileName.isNotEmpty) {
+      try {
+        final positions = await GpxService.instance.loadRide(fileName);
+        if (mounted) {
+          setState(() {
+            _selectedRideTrack = positions
+                .map((position) => LatLng(position.latitude, position.longitude))
+                .toList();
+          });
+        }
+      } catch (_) {
+        // The replay still runs even if the track overlay cannot be loaded.
+      }
+    }
+
+    await _setRecordingKeepScreenOn(true);
+    if (!mounted) return;
+    setState(() => _isReplayingRide = true);
+    _scheduleScreenSleep();
+
+    _timerTick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (!GPSService.instance.isReplaying) {
+        _stopRideReplay();
+        return;
+      }
+      setState(() {});
+      _refreshHistoricalRidePositions();
+    });
   }
 
-  Future<void> _stopReplay() async {
-    await GPSService.instance.stopReplay();
-    if (mounted) {
-      setState(() => _replayFileName = null);
-      _startLiveTracking();
-    }
+  Future<void> _stopRideReplay() async {
+    _timerTick.cancel();
+    await RideService.instance.stopRideReplay();
+    await _setRecordingKeepScreenOn(false);
+    _screenSleepTimer?.cancel();
+    _wakeScreen();
+    if (!mounted) return;
+    setState(() {
+      _isReplayingRide = false;
+      _historicalRidePositions = [];
+    });
+    _startLiveTracking();
   }
 
   Future<void> _setRecordingKeepScreenOn(bool enabled) async {
@@ -517,6 +551,9 @@ class _LiveMapScreenState extends State<LiveMapScreen>
     } else if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
+      if (_isReplayingRide) {
+        _stopRideReplay();
+      }
       if (_isRecording) {
         _setRecordingKeepScreenOn(false);
       }
@@ -686,8 +723,11 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       GPSService.instance.stopTracking();
       _setRecordingKeepScreenOn(false);
     }
-    if (_isRecording) {
+    if (_isRecording || _isReplayingRide) {
       _timerTick.cancel();
+    }
+    if (_isReplayingRide) {
+      RideService.instance.stopRideReplay();
     }
     GPSService.instance.removePositionListener(_onGPSPosition);
     super.dispose();
@@ -770,7 +810,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
               ),
             ],
           ),
-        if (_isRecording &&
+        if ((_isRecording || _isReplayingRide) &&
             (RideService.instance.currentRide?.positions.length ?? 0) >= 2)
           PolylineLayer(
             polylines: [
@@ -784,7 +824,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
             ],
           ),
         if (_activeRoute != null) _buildRouteToleranceCircles(_activeRoute!),
-        if (_isRecording && _historicalRidePositions.isNotEmpty)
+        if (_showLiveStats && _historicalRidePositions.isNotEmpty)
           MarkerLayer(
             markers: _historicalRidePositions
                 .asMap()
@@ -903,7 +943,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
             ),
           ),
 
-        if (_isRecording && _currentPosition != null)
+        if (_showLiveStats && _currentPosition != null)
           Positioned(
             top: 16,
             left: 16,
@@ -1021,33 +1061,23 @@ class _LiveMapScreenState extends State<LiveMapScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (!_isRecording)
+                  if (!_isRecording && !_isReplayingRide)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.route, size: 18, color: Colors.grey),
+                          Icon(Icons.route, size: 18, color: Colors.grey.shade700),
                           const SizedBox(width: 6),
-                          Text(
-                            'Active route: $_activeRouteName',
-                            style: const TextStyle(color: Colors.grey),
+                          Flexible(
+                            child: Text(
+                              _activeRouteName,
+                              style: TextStyle(color: Colors.grey.shade700),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
                           ),
                         ],
-                      ),
-                    ),
-                  if (kDebugMode)
-                    OutlinedButton.icon(
-                      onPressed: _replayFileName == null
-                          ? _selectReplayRide
-                          : _stopReplay,
-                      icon: Icon(
-                        _replayFileName == null ? Icons.replay : Icons.stop,
-                      ),
-                      label: Text(
-                        _replayFileName == null
-                            ? 'Replay GPX'
-                            : 'Stop replay: $_replayFileName',
                       ),
                     ),
                   Padding(
@@ -1057,11 +1087,23 @@ class _LiveMapScreenState extends State<LiveMapScreen>
                         Expanded(
                           flex: 2,
                           child: ElevatedButton.icon(
-                            onPressed: _isRecording ? _stopRecording : _startRecording,
-                            icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
-                            label: Text(_isRecording ? 'STOP' : 'START RECORDING'),
+                            onPressed: _isReplayingRide
+                                ? _stopRideReplay
+                                : (_isRecording ? _stopRecording : _startRecording),
+                            icon: Icon(_isReplayingRide || _isRecording
+                                ? Icons.stop
+                                : Icons.play_arrow),
+                            label: Text(
+                              _isReplayingRide
+                                  ? 'STOP REPLAY'
+                                  : (_isRecording ? 'STOP' : 'START RECORDING'),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: _isRecording ? Colors.red : Colors.green,
+                              backgroundColor: _isReplayingRide
+                                  ? Colors.blueGrey
+                                  : (_isRecording ? Colors.red : Colors.green),
                               padding: const EdgeInsets.symmetric(vertical: 10),
                             ),
                           ),
@@ -1069,7 +1111,9 @@ class _LiveMapScreenState extends State<LiveMapScreen>
                         const SizedBox(width: 8),
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: _isRecording ? _togglePause : _sleepNow,
+                            onPressed: _isReplayingRide
+                                ? null
+                                : (_isRecording ? _togglePause : _sleepNow),
                             icon: Icon(_isRecording
                                 ? (_isPaused ? Icons.play_arrow : Icons.pause)
                                 : Icons.bedtime),
@@ -1106,7 +1150,7 @@ class _LiveMapScreenState extends State<LiveMapScreen>
       ),
     );
 
-    if (widget.selectedRideFileName != null) {
+    if (widget.selectedRideFileName != null || widget.replayRideId != null) {
       return Scaffold(
         body: mapContent,
         bottomNavigationBar: AppBottomNavigation(

@@ -60,6 +60,8 @@ class RideService {
   RecordedRide? _currentRide;
   bool _isRecording = false;
   bool _isPaused = false;
+  bool _isReplayingRide = false;
+  int? _replayComparisonRouteId;
   String? _lastError;
   int? _selectedRouteId;
   GPSPosition? _cleanStartPoint;
@@ -76,6 +78,15 @@ class RideService {
 
   /// Zda se právě nahrává
   bool get isRecording => _isRecording;
+
+  /// Zda se právě přehrává už uložená jízda (bez ukládání)
+  bool get isReplayingRide => _isReplayingRide;
+
+  /// Trasa, se kterou se přehrávaná jízda porovnává, nebo null bez porovnání
+  int? get replayComparisonRouteId => _replayComparisonRouteId;
+
+  /// Zda běží nahrávání nebo přehrávání - řídí sdílenou timeline/statistiky
+  bool get isLiveSessionActive => _isRecording || _isReplayingRide;
 
   bool get isPaused => _isPaused;
 
@@ -141,10 +152,10 @@ class RideService {
   /// Začni záznam nové jízdy
   Future<void> startRecording({required String userId, int? routeId}) async {
     _lastError = null;
-    if (_isRecording) {
-      _lastError = 'Already recording';
+    if (_isRecording || _isReplayingRide) {
+      _lastError = 'Already recording or replaying';
       if (kDebugMode) {
-        debugPrint('Ride: Already recording');
+        debugPrint('Ride: Already recording or replaying');
       }
       return;
     }
@@ -189,7 +200,7 @@ class RideService {
 
   /// GPS position update callback
   void _onPositionUpdate(GPSPosition position) {
-    if (_isRecording && !_isPaused && _currentRide != null) {
+    if ((_isRecording || _isReplayingRide) && !_isPaused && _currentRide != null) {
       _currentRide!.addPosition(position);
       final cleanStartedNow = _checkCleanStart(position);
       if (!cleanStartedNow) {
@@ -348,6 +359,81 @@ class RideService {
       }
       return false;
     }
+  }
+
+  /// Replay an already saved ride (assigned or unassigned) without recording.
+  ///
+  /// When the ride belongs to [activeRouteId] (or is unassigned), progress is
+  /// compared against [activeRouteId] just like a live recording. When the
+  /// ride belongs to a different route, only its position is driven; no
+  /// statistics or comparison rides are produced.
+  Future<bool> startRideReplay(
+    Map<String, dynamic> ride, {
+    required int? activeRouteId,
+  }) async {
+    _lastError = null;
+    if (_isRecording || _isReplayingRide) {
+      _lastError = 'A recording or replay is already active';
+      return false;
+    }
+
+    final fileName = ride['gpx_file_path'] as String?;
+    if (fileName == null || fileName.isEmpty) {
+      _lastError = 'Ride has no GPX file';
+      return false;
+    }
+    final positions = await GpxService.instance.loadRide(fileName);
+    if (positions.isEmpty) {
+      _lastError = 'GPX file contains no points';
+      return false;
+    }
+
+    final rideRouteId = ride['route_id'] as int?;
+    final comparisonRouteId =
+        (rideRouteId == null || rideRouteId == activeRouteId)
+            ? activeRouteId
+            : null;
+
+    _currentRide = RecordedRide(startTime: positions.first.timestamp, positions: []);
+    _currentRide!.userId = ride['user_nick'] as String?;
+    _selectedRouteId = comparisonRouteId;
+    _replayComparisonRouteId = comparisonRouteId;
+    _cleanStartIndex = null;
+    _cleanStartPoint = null;
+    _cleanStartRadiusMeters = null;
+    _liveTimeline = null;
+
+    if (comparisonRouteId != null) {
+      final settings = await DatabaseService.instance.getSettings();
+      _pauseRadiusMeters =
+          (settings?['pause_radius_meters'] as num?)?.toDouble() ?? 20.0;
+      _pauseMinDurationSeconds =
+          (settings?['pause_min_duration_seconds'] as num?)?.toInt() ?? 90;
+      await _configureCleanStart(comparisonRouteId);
+    }
+
+    _isReplayingRide = true;
+    GPSService.instance.addPositionListener(_onPositionUpdate);
+    final started = await GPSService.instance.startReplay(positions);
+    if (!started) {
+      await stopRideReplay();
+      _lastError = 'Replay failed to start';
+      return false;
+    }
+    return true;
+  }
+
+  /// Stop an active ride replay started via [startRideReplay].
+  Future<void> stopRideReplay() async {
+    if (!_isReplayingRide) return;
+    _isReplayingRide = false;
+    GPSService.instance.removePositionListener(_onPositionUpdate);
+    await GPSService.instance.stopReplay();
+    _currentRide = null;
+    _selectedRouteId = null;
+    _replayComparisonRouteId = null;
+    _cleanStartIndex = null;
+    _liveTimeline = null;
   }
 
   void pauseRecording() {

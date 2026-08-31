@@ -19,28 +19,6 @@ class GpxService {
 		return _loadPositions(file);
 	}
 
-	/// List GPX files reserved for debug replay.
-	Future<List<String>> listTestRides() async {
-		final documentsDirectory = await getApplicationDocumentsDirectory();
-		final directory = Directory(path.join(documentsDirectory.path, 'gpx_test'));
-		if (!await directory.exists()) return [];
-
-		final files = await directory
-			.list()
-			.where((entry) => entry is File && entry.path.toLowerCase().endsWith('.gpx'))
-			.map((entry) => path.basename(entry.path))
-			.toList();
-		files.sort();
-		return files;
-	}
-
-	/// Load a debug replay file from the separate gpx_test/ directory.
-	Future<List<GPSPosition>> loadTestRide(String fileName) async {
-		final documentsDirectory = await getApplicationDocumentsDirectory();
-		final file = File(path.join(documentsDirectory.path, 'gpx_test', fileName));
-		return _loadPositions(file);
-	}
-
 	Future<void> deleteRideFile(String fileName) async {
 		final documentsDirectory = await getApplicationDocumentsDirectory();
 		final file = File(path.join(documentsDirectory.path, 'gpx', fileName));

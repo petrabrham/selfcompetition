@@ -251,6 +251,14 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
     );
   }
 
+  void _replayRide(Map<String, dynamic> ride) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LiveMapScreen(replayRideId: ride['id'] as int),
+      ),
+    );
+  }
+
   Future<void> _deleteRide(Map<String, dynamic> ride) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
@@ -364,6 +372,7 @@ class _RouteDetailScreenState extends State<RouteDetailScreen> {
                   onDelete: () => _deleteRide(ride),
                   onMove: () => _moveRide(ride),
                     onShowOnMap: () => _showRideOnMap(ride),
+                    onReplay: () => _replayRide(ride),
                     isMainRide: ride['id'] == mainRideId,
                     onSetMain: widget.routeId == null ? null : () => _setMainRide(ride),
                 )),
@@ -383,6 +392,7 @@ class _RideListItem extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onMove;
   final VoidCallback onShowOnMap;
+  final VoidCallback onReplay;
   final bool isMainRide;
   final VoidCallback? onSetMain;
 
@@ -391,6 +401,7 @@ class _RideListItem extends StatelessWidget {
     required this.onDelete,
     required this.onMove,
     required this.onShowOnMap,
+    required this.onReplay,
     required this.isMainRide,
     this.onSetMain,
   });
@@ -420,6 +431,7 @@ class _RideListItem extends StatelessWidget {
       trailing: PopupMenuButton<String>(
         onSelected: (value) {
           if (value == 'map') onShowOnMap();
+          if (value == 'replay') onReplay();
           if (value == 'move') onMove();
           if (value == 'delete') onDelete();
           if (value == 'main') onSetMain?.call();
@@ -440,6 +452,14 @@ class _RideListItem extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               leading: Icon(Icons.map_outlined),
               title: Text('Show on map'),
+            ),
+          ),
+          const PopupMenuItem(
+            value: 'replay',
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.replay),
+              title: Text('Replay ride'),
             ),
           ),
           const PopupMenuItem(
